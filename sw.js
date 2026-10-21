@@ -1,8 +1,8 @@
 // オフラインでも開けるようにアプリ本体をキャッシュする。
 // ネットにつながるときは最新を取りに行き、つながらないときはキャッシュを使う。
-const CACHE = 'mono-kanri-v3';
+const CACHE = 'mono-kanri-v4';
 const ASSETS = [
-  './', 'index.html', 'styles.css', 'app.js', 'db.js', 'zip.js', 'manifest.webmanifest',
+  './', 'index.html', 'styles.css', 'app.js', 'db.js', 'zip.js', 'csv.js', 'manifest.webmanifest',
   'vendor/qrcode.js', 'vendor/jsQR.js',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png',
 ];

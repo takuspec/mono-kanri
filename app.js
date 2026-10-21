@@ -1,5 +1,6 @@
-import * as db from './db.js?v=3';
-import { makeZip, readZip } from './zip.js?v=3';
+import * as db from './db.js?v=4';
+import { makeZip, readZip } from './zip.js?v=4';
+import { decodeCsv, parseCsv, toCsv } from './csv.js?v=4';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -44,6 +45,7 @@ const ICONS = {
   info: C(12, 12, 8.5) + P('M12 11v5M12 8h.01'),
   alert: P('M10.3 4.6 3 17.5A2 2 0 0 0 4.7 20.5h14.6a2 2 0 0 0 1.7-3L13.7 4.6a2 2 0 0 0-3.4 0zM12 9.5v4M12 17h.01'),
   archive: P('M3.5 4.5h17v4h-17zM5 8.5V19a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19V8.5M10 12.5h4'),
+  table: `<rect x="3.5" y="4.5" width="17" height="15" rx="2"/>` + P('M3.5 9.5h17M3.5 14.5h17M9.5 9.5v10'),
   phone: `<rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/>` + P('M11 18h2'),
   // 場所用
   box: P('M20.5 7.5 12 3 3.5 7.5v9L12 21l8.5-4.5zM3.5 7.5 12 12l8.5-4.5M12 12v9'),
@@ -459,10 +461,13 @@ function itemView(id) {
 function itemEdit(id, q) {
   const isNew = id === 'new';
   const it = isNew
-    ? { id: uid(), name: '', quantity: 1, locationId: q.get('loc') || null, tags: [], note: '', photos: [] }
+    ? { id: uid(), name: '', quantity: 1, locationId: q.get('loc') || null, tags: q.getAll('tag'), note: '', photos: [] }
     : item(id);
   if (!it) return notFound();
-  setHeader(isNew ? '新しいアイテム' : 'アイテムを編集', {
+  // 「続けてもう1つ」で来たときは何件目かを出す
+  const nth = Number(q.get('n')) || 0;
+  if (nth) window.scrollTo(0, 0);
+  setHeader(isNew ? (nth ? `新しいアイテム（${nth}件目）` : '新しいアイテム') : 'アイテムを編集', {
     back: isNew ? (it.locationId ? `#/loc/${it.locationId}` : '#/') : `#/item/${id}`, always: true,
   });
   // 保存するまで写真の変更は保留しておく
@@ -489,7 +494,9 @@ function itemEdit(id, q) {
       </div>
       <div class="group-title">メモ</div>
       <div class="group"><label class="frow col"><textarea name="note" maxlength="2000" placeholder="型番、買った店、使い方など">${esc(it.note)}</textarea></label></div>
-      <div class="savebar"><button class="btn primary block">${ic('check')}保存</button></div>
+      <div class="savebar">${isNew
+        ? `<div class="save-row"><button class="btn" id="saveNext">${ic('plus')}保存して次へ</button><button class="btn primary">${ic('check')}保存</button></div>`
+        : `<button class="btn primary block">${ic('check')}保存</button>`}</div>
     </form>
     <input type="file" id="pick" accept="image/*" multiple hidden>`;
   const f = $view.querySelector('#f');
@@ -579,6 +586,16 @@ function itemEdit(id, q) {
     removed.forEach(forgetPhoto);
     for (const a of added) photoUrls.set(`photos:${a.key}`, a.url);
     await load();
+    if (e.submitter?.id === 'saveNext') {
+      // 同じ場所・同じタグのまま、次のアイテムの入力に進む
+      const next = (nth || 1) + 1;
+      const p = new URLSearchParams({ n: next });
+      if (v.locationId) p.set('loc', v.locationId);
+      v.tags.forEach(t => p.append('tag', t));
+      toast(`「${v.name}」を保存しました`);
+      location.replace(`#/item/new/edit?${p}`);
+      return;
+    }
     toast('保存しました');
     location.replace(`#/item/${v.id}`);
   };
@@ -810,6 +827,14 @@ async function settingsView() {
     <p class="footnote">写真ごと1つの ZIP ファイルにまとめます。iPhone は「"ファイル"に保存」、Android は Google ドライブなどに保存しておくと、機種変更のときもそのまま復元できます。</p>
     <input type="file" id="file" accept=".zip,application/zip,.json,application/json" hidden>
 
+    <div class="group-title">まとめて登録</div>
+    <div class="group">
+      <button class="row-btn" id="csv"><span class="lead" style="background:#f59e0b">${ic('table')}</span><span>CSV ファイルから追加</span>${ic('chevR', 'row-chev')}</button>
+      <button class="row-btn" id="csvTemplate"><span class="lead" style="background:#64748b">${ic('download')}</span><span>ひな形の CSV をダウンロード</span>${ic('chevR', 'row-chev')}</button>
+    </div>
+    <p class="footnote">PC の Excel や Google スプレッドシートで「名前・数量・場所・タグ・メモ」を1行に1つずつ入力し、CSV で保存して読み込みます。場所は「押し入れ/箱A」のように書くと、まだない場所は自動で作ります。</p>
+    <input type="file" id="csvFile" accept=".csv,text/csv,text/comma-separated-values" hidden>
+
     <div class="group-title">容量</div>
     <div class="group">
       <div class="usage">
@@ -822,7 +847,7 @@ async function settingsView() {
     <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
 
     <div class="group-title">このアプリについて</div>
-    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.2</span></div></div>`;
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.3</span></div></div>`;
 
   const $export = $view.querySelector('#export');
   $export.onclick = async () => {
@@ -864,6 +889,19 @@ async function settingsView() {
     location.hash = '#/';
   };
 
+  const $csv = $view.querySelector('#csvFile');
+  $view.querySelector('#csv').onclick = () => $csv.click();
+  $csv.onchange = async () => {
+    const f = $csv.files[0];
+    $csv.value = '';
+    if (!f) return;
+    const { rows, skipped } = csvToRows(parseCsv(await decodeCsv(f)));
+    pendingImport = { ...planImport(rows), skipped, fileName: f.name };
+    location.hash = '#/import';
+  };
+  $view.querySelector('#csvTemplate').onclick = () =>
+    downloadFile(new Blob(['﻿' + toCsv(CSV_TEMPLATE)], { type: 'text/csv' }), 'mono-kanri-ひな形.csv');
+
   $view.querySelector('#persist')?.addEventListener('click', async () => {
     const ok = await navigator.storage.persist();
     toast(ok ? '消えにくい保存を有効にしました' : 'ブラウザに許可されませんでした。ホーム画面に追加してから試してください。', ok ? 'ok' : 'error');
@@ -898,6 +936,119 @@ async function homeBanners() {
   return out.join('');
 }
 
+// ---------- CSV からまとめて追加 ----------
+const CSV_COLS = {
+  name: ['名前', '品名', '商品名', 'name'],
+  quantity: ['数量', '個数', 'quantity', 'qty'],
+  location: ['場所', 'location'],
+  tags: ['タグ', 'tag', 'tags'],
+  note: ['メモ', '備考', 'note'],
+};
+const CSV_TEMPLATE = [
+  ['名前', '数量', '場所', 'タグ', 'メモ'],
+  ['延長コード', '2', 'リビング/テレビ台', '電気 予備', '3mと1m'],
+  ['KINGDOM HEARTS III ブリングアーツ リク', '1', '押し入れ/フィギュア棚', 'キングダムハーツ フィギュア', ''],
+  ['単3電池', '8', 'キッチン/引き出し', '消耗品', ''],
+];
+
+// 1行目が見出しなら列名で、なければ「名前・数量・場所・タグ・メモ」の順として読む
+function csvToRows(table) {
+  const rows = table.filter(r => r.some(c => c.trim()));
+  const head = (rows[0] ?? []).map(c => c.trim().toLowerCase());
+  const idx = Object.fromEntries(Object.entries(CSV_COLS).map(([k, names]) => [k, head.findIndex(h => names.includes(h))]));
+  const hasHeader = idx.name >= 0;
+  if (!hasHeader) Object.assign(idx, { name: 0, quantity: 1, location: 2, tags: 3, note: 4 });
+  const out = [];
+  let skipped = 0;
+  for (const r of hasHeader ? rows.slice(1) : rows) {
+    const get = k => (idx[k] >= 0 ? r[idx[k]] ?? '' : '').trim();
+    const name = get('name');
+    if (!name) { skipped++; continue; }
+    const qty = parseInt(get('quantity').normalize('NFKC').replace(/[^\d]/g, ''), 10);
+    out.push({
+      name,
+      quantity: Number.isFinite(qty) ? qty : 1,
+      path: get('location').split(/\s*[/／>＞›]\s*/).filter(Boolean),
+      tags: parseTags(get('tags')),
+      note: get('note'),
+    });
+  }
+  return { rows: out, skipped };
+}
+
+// 場所は「押し入れ/箱A」のような書き方で、なければ新しく作る
+function planImport(rows) {
+  const all = [...L];
+  const newLocs = [];
+  const now = Date.now();
+  const items = rows.map((r, i) => {
+    let pid = null;
+    for (const name of r.path) {
+      let l = all.find(x => (x.parentId ?? null) === pid && x.name === name);
+      if (!l) {
+        l = { id: uid(), name, parentId: pid, note: '', icon: 'box', createdAt: now };
+        all.push(l);
+        newLocs.push(l);
+      }
+      pid = l.id;
+    }
+    return { id: uid(), name: r.name, quantity: r.quantity, locationId: pid, tags: r.tags, note: r.note, photos: [], createdAt: now + i, updatedAt: now + i };
+  });
+  const pathOf = id => {
+    const out = [];
+    for (let l = all.find(x => x.id === id); l; l = all.find(x => x.id === l.parentId)) out.unshift(l.name);
+    return out.join(' › ');
+  };
+  return { items, newLocs, pathOf };
+}
+
+let pendingImport = null;
+
+function importView() {
+  if (!pendingImport) return void location.replace('#/settings');
+  const { items, newLocs, skipped, pathOf, fileName } = pendingImport;
+  setHeader('CSVから追加', { back: '#/settings', always: true });
+  const MAX = 100;
+  const row = it => `<div class="row">
+    <span class="row-media"><span class="ph-tile" style="--c:${hue(it.name)}">${initial(it.name)}</span></span>
+    <span class="row-main"><span class="row-title">${esc(it.name)}</span><span class="row-sub">${esc([it.locationId ? pathOf(it.locationId) : '場所未設定', tagText(it)].filter(Boolean).join('　'))}</span></span>
+    <span class="row-qty">×${it.quantity}</span>
+  </div>`;
+  $view.innerHTML = `
+    <p class="meta" style="margin:4px 2px 0">${esc(fileName)}</p>
+    <div class="stats">
+      <div class="stat accent"><b>${items.length}</b><span>追加するアイテム</span></div>
+      <div class="stat"><b>${newLocs.length}</b><span>新しく作る場所</span></div>
+      <div class="stat"><b>${skipped}</b><span>飛ばす行</span></div>
+    </div>
+    ${skipped ? '<p class="footnote">名前が空の行は飛ばします。</p>' : ''}
+    ${!items.length
+      ? `<div style="margin-top:20px">${empty('info', '追加できる行がありませんでした', '1列目に名前を入れた CSV か、「名前」という見出しのある CSV を選んでください')}</div>`
+      : `${newLocs.length ? secHead('新しく作る場所', newLocs.length) + `<div class="chips">${newLocs.map(l => `<span class="chip">${ic('box')}${esc(pathOf(l.id))}</span>`).join('')}</div>` : ''}
+         ${secHead('追加するアイテム', items.length)}
+         <div class="list">${items.slice(0, MAX).map(row).join('')}</div>
+         ${items.length > MAX ? `<p class="footnote">ほか ${items.length - MAX} 件</p>` : ''}
+         <p class="footnote">写真はあとからアイテムごとに追加できます。</p>
+         <div class="savebar"><button class="btn primary block" id="go">${ic('check')}${items.length} 件を追加する</button></div>`}`;
+  $view.querySelector('#go')?.addEventListener('click', async e => {
+    e.currentTarget.disabled = true;
+    await db.write(s => {
+      for (const l of newLocs) s.locations.put(l);
+      for (const it of items) s.items.put(it);
+    });
+    pendingImport = null;
+    await load();
+    toast(`${items.length} 件を追加しました`);
+    location.replace('#/');
+  });
+}
+
+function downloadFile(blob, name) {
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: name });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+
 function notFound() {
   setHeader('見つかりません', { back: '#/', always: true });
   $view.innerHTML = `<div style="margin-top:12px">${empty('info', '見つかりませんでした', '削除されたか、別の端末のデータです')}</div>`;
@@ -928,6 +1079,7 @@ const routes = [
   [/^\/search$/, searchView, 'search'],
   [/^\/scan$/, scanView, 'scan'],
   [/^\/settings$/, settingsView, 'settings'],
+  [/^\/import$/, importView, 'settings', true],
 ];
 
 let cleanup = null;

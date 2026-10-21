@@ -22,12 +22,14 @@ http://localhost:5176 を開く。
 GitHub Pages などの静的ホスティングに置き、スマホのブラウザで開いて「ホーム画面に追加」する。
 
 ファイルを更新したら、次の番号をそろえて上げる（古いファイルと新しいファイルが混ざって動かなくなるのを防ぐため）。
-- `sw.js` の `CACHE`（`mono-kanri-v3` など）
-- `index.html` と `app.js` にある `?v=3`
+- `sw.js` の `CACHE`（`mono-kanri-v4` など）
+- `index.html` と `app.js` にある `?v=4`
 
 ## ファイル
 - `index.html` / `styles.css` / `app.js` … 画面
 - `db.js` … IndexedDB への保存
+- `zip.js` … バックアップ（写真ごと ZIP）の書き出し・読み込み
+- `csv.js` … CSV の読み込み（UTF-8 と Excel の Shift_JIS）
 - `sw.js` / `manifest.webmanifest` … オフライン対応・インストール
 - `vendor/` … QR生成（qrcode-generator 1.4.4）、QR読み取り（jsQR 1.4.0）
 - `tools/make_icons.py` … アイコン生成

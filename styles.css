@@ -394,6 +394,9 @@ body.editing main { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
   box-shadow: 0 -1px 0 var(--line);
 }
 .savebar .btn { max-width: 728px; margin: 0 auto; display: flex; }
+.save-row { display: flex; gap: 10px; max-width: 728px; margin: 0 auto; }
+.save-row .btn { flex: 1; margin: 0; }
+.save-row .btn:not(.primary) { color: var(--accent); background: var(--accent-soft); box-shadow: none; }
 
 /* 数量ステッパー */
 .stepper {
