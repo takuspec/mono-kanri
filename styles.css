@@ -12,6 +12,7 @@
   --on-accent: #ffffff;
   --danger: #e11d48;
   --ok: #10b981;
+  --warn: #f59e0b;
   --shadow-sm: 0 1px 2px rgba(16, 24, 40, .04), 0 1px 3px rgba(16, 24, 40, .06);
   --shadow-md: 0 4px 12px rgba(16, 24, 40, .08), 0 1px 3px rgba(16, 24, 40, .06);
   --shadow-lg: 0 12px 32px rgba(79, 70, 229, .28);
@@ -549,6 +550,39 @@ body.editing .tabbar { display: none; }
 }
 #toast .ic { color: var(--ok); width: 20px; height: 20px; stroke-width: 2.4; }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
+#toast.error { border-radius: 16px; align-items: flex-start; line-height: 1.5; padding: 12px 16px 12px 12px; width: max-content; }
+#toast.error .ic { color: var(--warn); }
+
+/* お知らせ（ホーム） */
+.banner {
+  display: flex; gap: 12px; align-items: flex-start;
+  margin-top: 12px; padding: 14px; border-radius: var(--r);
+  background: var(--surface); box-shadow: var(--shadow-sm);
+  border-left: 4px solid var(--accent);
+}
+.banner.warn { border-left-color: var(--warn); }
+.banner .lead {
+  display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: 11px;
+  background: var(--accent-soft); color: var(--accent);
+}
+.banner.warn .lead { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.banner .lead .ic { width: 20px; height: 20px; }
+.banner b { display: block; font-size: 15px; }
+.banner p { margin: 2px 0 0; font-size: 13px; color: var(--text-2); line-height: 1.6; }
+.banner-actions { display: flex; gap: 8px; margin-top: 10px; }
+.btn.sm { min-height: 36px; padding: 0 14px; border-radius: 10px; font-size: 14px; box-shadow: none; background: var(--surface-2); }
+.btn.sm.primary { background: var(--accent); box-shadow: none; }
+
+/* 容量バー（設定） */
+.usage { padding: 14px 16px; }
+.usage-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.usage-top b { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.usage-top span { font-size: 13px; color: var(--text-2); }
+.usage p { margin: 8px 0 0; font-size: 13px; color: var(--text-2); }
+.bar { height: 8px; margin-top: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.bar.low i { background: var(--warn); }
+.row-btn:disabled { opacity: .6; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

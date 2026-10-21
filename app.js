@@ -1,4 +1,5 @@
-import * as db from './db.js';
+import * as db from './db.js?v=3';
+import { makeZip, readZip } from './zip.js?v=3';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -41,6 +42,9 @@ const ICONS = {
   list: P('M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01'),
   shield: P('M12 3.5 5 6.5v5.5c0 4.2 2.9 7.2 7 8.5 4.1-1.3 7-4.3 7-8.5V6.5z') + P('m9 12 2 2 4-4'),
   info: C(12, 12, 8.5) + P('M12 11v5M12 8h.01'),
+  alert: P('M10.3 4.6 3 17.5A2 2 0 0 0 4.7 20.5h14.6a2 2 0 0 0 1.7-3L13.7 4.6a2 2 0 0 0-3.4 0zM12 9.5v4M12 17h.01'),
+  archive: P('M3.5 4.5h17v4h-17zM5 8.5V19a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19V8.5M10 12.5h4'),
+  phone: `<rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/>` + P('M11 18h2'),
   // 場所用
   box: P('M20.5 7.5 12 3 3.5 7.5v9L12 21l8.5-4.5zM3.5 7.5 12 12l8.5-4.5M12 12v9'),
   room: P('M6 20.5V4.5A1 1 0 0 1 7 3.5h10a1 1 0 0 1 1 1v16M3.5 20.5h17M14.5 12h.01'),
@@ -57,12 +61,40 @@ const HUES = ['#6366f1', '#0ea5e9', '#14b8a6', '#22c55e', '#f59e0b', '#f97316', 
 const hue = s => HUES[[...String(s)].reduce((h, c) => (h * 31 + c.codePointAt(0)) >>> 0, 7) % HUES.length];
 const locColor = l => l.color ?? hue(l.id);
 
-function toast(msg) {
+function toast(msg, kind = 'ok') {
   const t = document.getElementById('toast');
-  t.innerHTML = ic('check') + esc(msg);
+  t.innerHTML = ic(kind === 'error' ? 'alert' : 'check') + `<span>${esc(msg)}</span>`;
+  t.classList.toggle('error', kind === 'error');
   t.classList.add('show');
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => t.classList.remove('show'), 1800);
+  toast.timer = setTimeout(() => t.classList.remove('show'), kind === 'error' ? 5000 : 1800);
+}
+
+// 保存に失敗したとき（多くは容量不足）に、黙って失敗しないよう知らせる
+window.addEventListener('unhandledrejection', e => {
+  const quota = e.reason?.name === 'QuotaExceededError';
+  toast(quota
+    ? '端末の空き容量が足りず、保存できませんでした。写真を減らすか、端末の空きを増やしてください。'
+    : `うまく保存できませんでした。もう一度お試しください。（${e.reason?.message || e.reason?.name || '不明なエラー'}）`, 'error');
+});
+
+document.addEventListener('db-blocked', () => {
+  $view.innerHTML = `<div style="margin-top:16px">${empty('alert', 'アプリを更新しています',
+    'ほかのタブやウィンドウで「モノ管理」が開いたままになっています。それを閉じると自動で続きます。')}</div>`;
+});
+
+// ---------- 容量 ----------
+const LOW_FREE = 100 * 1024 * 1024;
+async function storageInfo() {
+  const est = await navigator.storage?.estimate?.().catch(() => null);
+  const persisted = await navigator.storage?.persisted?.().catch(() => undefined);
+  return { usage: est?.usage, quota: est?.quota, persisted };
+}
+const isLow = s => !!s.quota && (s.usage / s.quota > 0.8 || s.quota - s.usage < LOW_FREE);
+function fmtBytes(n) {
+  if (n == null) return '—';
+  if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(1) + ' GB';
+  return (n / 1024 ** 2).toFixed(n < 10 * 1024 ** 2 ? 1 : 0) + ' MB';
 }
 
 const pref = {
@@ -112,27 +144,48 @@ function locOptions(selected, exclude = new Set()) {
 }
 
 // ---------- 写真 ----------
-const photoUrls = new Map();
-async function photoUrl(id) {
-  if (!photoUrls.has(id)) {
-    const p = await db.get('photos', id);
-    photoUrls.set(id, p ? URL.createObjectURL(p.blob) : '');
+// 一覧などの小さな表示はサムネイル（thumbs）、詳細の大きな表示だけ原寸（photos）を読む
+const photoUrls = new Map(); // `${store}:${id}` → object URL
+async function photoUrl(id, store = 'thumbs') {
+  const key = `${store}:${id}`;
+  if (!photoUrls.has(key)) {
+    const rec = await db.get(store, id);
+    // サムネイルがまだ作られていない写真は原寸で代用する（できたら次から使えるよう覚えない）
+    if (!rec && store === 'thumbs') return photoUrl(id, 'photos');
+    photoUrls.set(key, rec ? URL.createObjectURL(rec.blob) : '');
   }
-  return photoUrls.get(id);
+  return photoUrls.get(key);
 }
 function forgetPhoto(id) {
-  const u = photoUrls.get(id);
-  if (u) URL.revokeObjectURL(u);
-  photoUrls.delete(id);
+  for (const store of ['photos', 'thumbs']) {
+    const u = photoUrls.get(`${store}:${id}`);
+    if (u) URL.revokeObjectURL(u);
+    photoUrls.delete(`${store}:${id}`);
+  }
 }
-// data-photo 属性を持つ img に画像を差し込む
+// data-photo 属性を持つ img に画像を差し込む（data-full があれば原寸）
 function hydratePhotos(root = $view) {
   root.querySelectorAll('img[data-photo]').forEach(async img => {
-    img.src = await photoUrl(img.dataset.photo);
+    img.src = await photoUrl(img.dataset.photo, 'full' in img.dataset ? 'photos' : 'thumbs');
   });
 }
+const THUMB = [360, 0.75];
+// サムネイルがない写真（前の版で保存したもの・古いバックアップ）に後から作る
+async function ensureThumbs() {
+  const [all, have] = await Promise.all([db.getAllKeys('photos'), db.getAllKeys('thumbs')]);
+  const done = new Set(have);
+  for (const id of all) {
+    if (done.has(id)) continue;
+    const p = await db.get('photos', id);
+    try {
+      await db.put('thumbs', { id, blob: await shrink(p.blob, ...THUMB) });
+    } catch {
+      return; // 容量不足などのときは、次に起動したときにまた試す
+    }
+  }
+}
 // 端末の写真は大きいので長辺 1280px の JPEG に縮小して保存する
-async function shrink(file, max = 1280) {
+async function shrink(file, max = 1280, quality = 0.82) {
   const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => createImageBitmap(file));
   const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
   const c = document.createElement('canvas');
@@ -140,7 +193,7 @@ async function shrink(file, max = 1280) {
   c.height = Math.round(bmp.height * k);
   c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
   bmp.close?.();
-  return new Promise(r => c.toBlob(r, 'image/jpeg', 0.82));
+  return new Promise(r => c.toBlob(r, 'image/jpeg', quality));
 }
 
 // ---------- 共通パーツ ----------
@@ -212,12 +265,13 @@ const parseTags = s => [...new Set(s.split(/[,、\s#]+/).map(t => t.trim()).filt
 const fmtDate = t => new Date(t).toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
 
 // ---------- 画面 ----------
-function home() {
+async function home() {
   setHeader('ホーム');
+  const banners = await homeBanners();
   const today = new Date().toLocaleDateString('ja-JP', { month: 'long', day: 'numeric', weekday: 'short' });
   const head = `<header class="page-head"><p class="eyebrow">${today}</p><h1 class="large">持ち物</h1></header>`;
   if (!L.length && !I.length) {
-    $view.innerHTML = head + empty('box', 'ようこそ',
+    $view.innerHTML = head + banners + empty('box', 'ようこそ',
       'まずは「リビング」「押し入れ」など、モノをしまう場所を登録しましょう。',
       `<a class="btn primary" href="#/loc/new/edit">${ic('plus')}最初の場所を追加</a>`, 'hero');
     return;
@@ -226,7 +280,7 @@ function home() {
   const recent = [...I].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)).slice(0, 10);
   const unplaced = itemsIn(null);
   const roots = childLocs(null);
-  $view.innerHTML = `${head}
+  $view.innerHTML = `${head}${banners}
     <a class="searchbar" href="#/search">${ic('search')}<span>名前・タグ・場所で探す</span></a>
     <div class="stats">
       <div class="stat accent"><b>${I.length}</b><span>アイテム</span></div>
@@ -237,6 +291,13 @@ function home() {
     <div class="place-grid">${roots.map(placeCard).join('') || `<a class="add-tile" href="#/loc/new/edit">${ic('plus')}場所を追加</a>`}</div>
     ${recent.length ? secHead('最近追加したもの') + `<div class="hscroll">${recent.map(i => itemCard(i, true)).join('')}</div>` : ''}
     ${unplaced.length ? secHead('場所未設定', unplaced.length) + itemsBlock(unplaced, 'list') : ''}`;
+  bindBanners();
+}
+function bindBanners() {
+  $view.querySelector('[data-snooze]')?.addEventListener('click', async () => {
+    await db.setMeta('backupSnoozeUntil', Date.now() + 7 * DAY);
+    render();
+  });
 }
 
 function locView(id) {
@@ -343,7 +404,7 @@ function itemView(id) {
   });
   const photos = it.photos ?? [];
   const hero = photos.length
-    ? `<div class="hero"><div class="carousel" id="car">${photos.map(p => `<img data-photo="${p}" alt="">`).join('')}</div>
+    ? `<div class="hero"><div class="carousel" id="car">${photos.map(p => `<img data-photo="${p}" data-full alt="">`).join('')}</div>
         ${photos.length > 1 ? `<div class="dots" id="dots">${photos.map((_, i) => `<i class="${i ? '' : 'on'}"></i>`).join('')}</div>` : ''}</div>`
     : `<div class="hero noimg"></div>`;
   const where = it.locationId ? pathText(it.locationId) : '場所未設定';
@@ -386,7 +447,7 @@ function itemView(id) {
     if (!confirm(`「${it.name}」を削除しますか？`)) return;
     await db.write(s => {
       s.items.delete(id);
-      for (const p of it.photos ?? []) s.photos.delete(p);
+      for (const p of it.photos ?? []) { s.photos.delete(p); s.thumbs.delete(p); }
     });
     (it.photos ?? []).forEach(forgetPhoto);
     await load();
@@ -406,7 +467,7 @@ function itemEdit(id, q) {
   });
   // 保存するまで写真の変更は保留しておく
   const kept = [...(it.photos ?? [])];
-  const added = []; // { key, blob, url }
+  const added = []; // { key, blob, thumb, url }
 
   $view.innerHTML = `
     <form id="f">
@@ -459,13 +520,15 @@ function itemEdit(id, q) {
     for (const file of $pick.files) {
       try {
         const blob = await shrink(file);
-        added.push({ key: uid(), blob, url: URL.createObjectURL(blob) });
+        const thumb = await shrink(blob, ...THUMB);
+        added.push({ key: uid(), blob, thumb, url: URL.createObjectURL(blob) });
       } catch {
-        toast('この画像は読み込めませんでした');
+        toast('この画像は読み込めませんでした', 'error');
       }
     }
     $pick.value = '';
     drawPhotos();
+    if (isLow(await storageInfo())) toast('端末の空き容量が少なくなっています。設定画面で確認してください。', 'error');
   };
   drawPhotos();
 
@@ -506,12 +569,15 @@ function itemEdit(id, q) {
       updatedAt: Date.now(),
     };
     await db.write(s => {
-      for (const a of added) s.photos.put({ id: a.key, blob: a.blob });
-      for (const p of removed) s.photos.delete(p);
+      for (const a of added) {
+        s.photos.put({ id: a.key, blob: a.blob });
+        s.thumbs.put({ id: a.key, blob: a.thumb });
+      }
+      for (const p of removed) { s.photos.delete(p); s.thumbs.delete(p); }
       s.items.put(v);
     });
     removed.forEach(forgetPhoto);
-    for (const a of added) photoUrls.set(a.key, a.url);
+    for (const a of added) photoUrls.set(`photos:${a.key}`, a.url);
     await load();
     toast('保存しました');
     location.replace(`#/item/${v.id}`);
@@ -678,52 +744,102 @@ function scanView() {
 }
 
 // ---------- 設定・バックアップ ----------
-const blobToDataUrl = b => new Promise((res, rej) => {
-  const r = new FileReader();
-  r.onload = () => res(r.result);
-  r.onerror = () => rej(r.error);
-  r.readAsDataURL(b);
-});
+const DAY = 24 * 60 * 60 * 1000;
+
+// 写真ごと1つの ZIP にまとめる。写真は Blob のままつなぐので、枚数が多くてもメモリを食わない
+async function exportBackup() {
+  const [photos, thumbs] = await Promise.all([db.getAll('photos'), db.getAll('thumbs')]);
+  const data = { app: 'mono-kanri', version: 2, exportedAt: new Date().toISOString(), locations: L, items: I };
+  const zip = await makeZip([
+    { name: 'data.json', blob: new Blob([JSON.stringify(data)], { type: 'application/json' }) },
+    ...photos.map(p => ({ name: `photos/${p.id}.jpg`, blob: p.blob })),
+    ...thumbs.map(t => ({ name: `thumbs/${t.id}.jpg`, blob: t.blob })),
+  ]);
+  const name = `mono-kanri-${new Date().toISOString().slice(0, 10)}.zip`;
+  const file = new File([zip], name, { type: 'application/zip' });
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: name });
+      return true;
+    } catch (e) {
+      if (e.name === 'AbortError') return false;
+    }
+  }
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(zip), download: name });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  return true;
+}
+
+// ZIP（今の形式）と JSON（最初の版の形式）の両方を読める
+async function readBackup(file) {
+  const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
+  const photos = [], thumbs = [];
+  let data;
+  if (head[0] === 0x50 && head[1] === 0x4b) { // "PK"
+    const entries = await readZip(file);
+    data = JSON.parse(await entries.get('data.json').text());
+    for (const [name, blob] of entries) {
+      const m = name.match(/^(photos|thumbs)\/([\w-]+)\.jpg$/);
+      if (m) (m[1] === 'photos' ? photos : thumbs).push({ id: m[2], blob: new Blob([blob], { type: 'image/jpeg' }) });
+    }
+  } else {
+    data = JSON.parse(await file.text());
+    for (const p of data.photos ?? []) photos.push({ id: p.id, blob: await (await fetch(p.data)).blob() });
+  }
+  if (data.app !== 'mono-kanri' || !Array.isArray(data.items) || !Array.isArray(data.locations)) throw new Error('not a backup');
+  return { locations: data.locations, items: data.items, photos, thumbs };
+}
 
 async function settingsView() {
   setHeader('設定');
   const photoCount = I.reduce((n, i) => n + (i.photos?.length ?? 0), 0);
+  const [s, last] = await Promise.all([storageInfo(), db.getMeta('lastBackupAt')]);
+  const pct = s.quota ? Math.min(100, (s.usage / s.quota) * 100) : 0;
+  const persistRow = s.persisted
+    ? '<span>有効</span>'
+    : s.persisted === false ? '<button class="link" id="persist">有効にする</button>' : '<span>この端末では使えません</span>';
   $view.innerHTML = `
     <header class="page-head"><h1 class="large">設定</h1></header>
     <div class="group-title">バックアップ</div>
     <div class="group">
       <button class="row-btn" id="export"><span class="lead">${ic('download')}</span><span>バックアップを書き出す</span>${ic('chevR', 'row-chev')}</button>
       <button class="row-btn" id="import"><span class="lead" style="background:#14b8a6">${ic('upload')}</span><span>バックアップから復元</span>${ic('chevR', 'row-chev')}</button>
+      <div class="kv-row"><span>前回のバックアップ</span><span>${last ? fmtDate(last) : 'まだありません'}</span></div>
     </div>
-    <p class="footnote">データはこの端末のブラウザの中だけに保存されています。アプリを消したりブラウザのデータを消去すると失われるので、ときどき書き出しておくと安心です。</p>
-    <input type="file" id="file" accept="application/json,.json" hidden>
-    <div class="group-title">この端末のデータ</div>
-    <div class="group" id="storage">
-      <div class="kv-row"><span>場所</span><span>${L.length}</span></div>
-      <div class="kv-row"><span>アイテム</span><span>${I.length}</span></div>
-      <div class="kv-row"><span>写真</span><span>${photoCount} 枚</span></div>
-    </div>
-    <div class="group-title">このアプリについて</div>
-    <div class="group">
-      <div class="kv-row"><span>モノ管理</span><span>バージョン 1.1</span></div>
-    </div>`;
+    <p class="footnote">写真ごと1つの ZIP ファイルにまとめます。iPhone は「"ファイル"に保存」、Android は Google ドライブなどに保存しておくと、機種変更のときもそのまま復元できます。</p>
+    <input type="file" id="file" accept=".zip,application/zip,.json,application/json" hidden>
 
-  $view.querySelector('#export').onclick = async () => {
-    const photos = await db.getAll('photos');
-    const data = {
-      app: 'mono-kanri', version: 1, exportedAt: new Date().toISOString(),
-      locations: L, items: I,
-      photos: await Promise.all(photos.map(async p => ({ id: p.id, data: await blobToDataUrl(p.blob) }))),
-    };
-    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-    const name = `mono-kanri-${new Date().toISOString().slice(0, 10)}.json`;
-    const file = new File([blob], name, { type: 'application/json' });
-    if (navigator.canShare?.({ files: [file] })) {
-      try { await navigator.share({ files: [file], title: name }); return; } catch (e) { if (e.name === 'AbortError') return; }
+    <div class="group-title">容量</div>
+    <div class="group">
+      <div class="usage">
+        <div class="usage-top"><b>${fmtBytes(s.usage)}</b><span>上限 ${fmtBytes(s.quota)}</span></div>
+        <div class="bar ${isLow(s) ? 'low' : ''}"><i style="width:${s.usage ? Math.max(pct, 1.5) : 0}%"></i></div>
+        <p>場所 ${L.length}・アイテム ${I.length}・写真 ${photoCount} 枚</p>
+      </div>
+      <div class="kv-row"><span>消えにくい保存</span>${persistRow}</div>
+    </div>
+    <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
+
+    <div class="group-title">このアプリについて</div>
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.2</span></div></div>`;
+
+  const $export = $view.querySelector('#export');
+  $export.onclick = async () => {
+    if ($export.disabled) return;
+    const label = $export.querySelector('span:not(.lead)');
+    $export.disabled = true;
+    label.textContent = 'バックアップを作成中…';
+    try {
+      if (await exportBackup()) {
+        await db.setMeta('lastBackupAt', Date.now());
+        toast('バックアップを書き出しました');
+        render();
+      }
+    } finally {
+      $export.disabled = false;
+      label.textContent = 'バックアップを書き出す';
     }
-    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: name });
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
 
   const $file = $view.querySelector('#file');
@@ -734,25 +850,52 @@ async function settingsView() {
     if (!f) return;
     let data;
     try {
-      data = JSON.parse(await f.text());
-      if (data.app !== 'mono-kanri' || !Array.isArray(data.items)) throw 0;
+      data = await readBackup(f);
     } catch {
-      return toast('バックアップファイルではないようです');
+      return toast('このアプリのバックアップファイルではないようです', 'error');
     }
-    if (!confirm(`今のデータを消して、バックアップ（場所 ${data.locations.length}・アイテム ${data.items.length}）に置き換えます。よろしいですか？`)) return;
-    const photos = await Promise.all((data.photos ?? []).map(async p => ({ id: p.id, blob: await (await fetch(p.data)).blob() })));
-    await db.replaceAll({ locations: data.locations, items: data.items, photos });
-    [...photoUrls.keys()].forEach(forgetPhoto);
+    if (!confirm(`今のデータを消して、バックアップ（場所 ${data.locations.length}・アイテム ${data.items.length}・写真 ${data.photos.length} 枚）に置き換えます。よろしいですか？`)) return;
+    await db.replaceAll(data);
+    for (const u of photoUrls.values()) if (u) URL.revokeObjectURL(u);
+    photoUrls.clear();
     await load();
+    ensureThumbs();
     toast('復元しました');
     location.hash = '#/';
   };
 
-  const est = await navigator.storage?.estimate?.();
-  const persisted = await navigator.storage?.persisted?.();
-  const $s = $view.querySelector('#storage');
-  if (est) $s.insertAdjacentHTML('beforeend', `<div class="kv-row"><span>使用量</span><span>${(est.usage / 1024 / 1024).toFixed(1)} MB</span></div>`);
-  if (persisted !== undefined) $s.insertAdjacentHTML('beforeend', `<div class="kv-row"><span>消えにくい保存</span><span>${persisted ? '有効' : '無効'}</span></div>`);
+  $view.querySelector('#persist')?.addEventListener('click', async () => {
+    const ok = await navigator.storage.persist();
+    toast(ok ? '消えにくい保存を有効にしました' : 'ブラウザに許可されませんでした。ホーム画面に追加してから試してください。', ok ? 'ok' : 'error');
+    render();
+  });
+}
+
+// ホームに出すお知らせ（iPhone のホーム画面追加・容量不足・バックアップ）
+const banner = (icon, title, text, actions = '', cls = '') =>
+  `<div class="banner ${cls}"><span class="lead">${ic(icon)}</span><div><b>${title}</b><p>${text}</p>${actions ? `<div class="banner-actions">${actions}</div>` : ''}</div></div>`;
+async function homeBanners() {
+  const out = [];
+  // navigator.standalone は iPhone / iPad の Safari にだけある
+  if (navigator.standalone === false) {
+    out.push(banner('phone', 'ホーム画面に追加して使ってください',
+      'Safari のまま使うと、しばらく開かなかったときにデータが消されることがあります。共有ボタンから「ホーム画面に追加」を選んでください。', '', 'warn'));
+  }
+  const s = await storageInfo();
+  if (isLow(s)) {
+    out.push(banner('alert', '空き容量が少なくなっています',
+      `使用量 ${fmtBytes(s.usage)}（上限 ${fmtBytes(s.quota)}）。バックアップを取ってから、写真を整理してください。`,
+      '<a class="btn sm" href="#/settings">確認する</a>', 'warn'));
+  }
+  const [last, snooze] = await Promise.all([db.getMeta('lastBackupAt'), db.getMeta('backupSnoozeUntil')]);
+  const now = Date.now();
+  const due = I.length > 0 && (last ? now - last > 30 * DAY : I.length >= 10) && !(snooze > now);
+  if (due) {
+    out.push(banner('archive', 'バックアップしておきましょう',
+      last ? `前回のバックアップから ${Math.floor((now - last) / DAY)} 日たっています。` : 'まだ一度もバックアップしていません。データはこの端末の中だけにあります。',
+      '<a class="btn sm primary" href="#/settings">書き出す</a><button type="button" class="btn sm" data-snooze>あとで</button>'));
+  }
+  return out.join('');
 }
 
 function notFound() {
@@ -817,7 +960,8 @@ const onScroll = () => document.body.classList.toggle('scrolled', window.scrollY
 window.addEventListener('scroll', onScroll, { passive: true });
 window.addEventListener('hashchange', render);
 await load();
-render();
+await render();
+ensureThumbs();
 
 // 端末の空き容量が少ないときに勝手に消されないよう、永続化をお願いしておく
 navigator.storage?.persist?.();
