@@ -3,9 +3,15 @@ import os
 import struct
 import zlib
 
-BG = (37, 99, 235)
+BG1 = (79, 70, 229)    # 左上
+BG2 = (129, 140, 248)  # 右下
 FG = (255, 255, 255)
-LID = (191, 219, 254)
+LID = (224, 231, 255)
+
+
+def bg(u, v):
+    t = (u + v) / 2
+    return tuple(round(a + (b - a) * t) for a, b in zip(BG1, BG2))
 
 
 def pixel(x, y, s):
@@ -16,6 +22,7 @@ def pixel(x, y, s):
     if (x - cx) ** 2 + (y - cy) ** 2 > r * r:
         return (0, 0, 0, 0)
     u, v = x / s, y / s
+    BG = bg(u, v)
     # 箱のふた
     if 0.22 <= u <= 0.78 and 0.30 <= v <= 0.42:
         return LID + (255,)
