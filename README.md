@@ -22,8 +22,8 @@ http://localhost:5176 を開く。
 GitHub Pages などの静的ホスティングに置き、スマホのブラウザで開いて「ホーム画面に追加」する。
 
 ファイルを更新したら、次の番号をそろえて上げる（古いファイルと新しいファイルが混ざって動かなくなるのを防ぐため）。
-- `sw.js` の `CACHE`（`mono-kanri-v4` など）
-- `index.html` と `app.js` にある `?v=4`
+- `sw.js` の `CACHE`（`mono-kanri-v5` など）
+- `index.html` と `app.js` にある `?v=5`
 
 ## ファイル
 - `index.html` / `styles.css` / `app.js` … 画面

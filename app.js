@@ -1,6 +1,6 @@
-import * as db from './db.js?v=4';
-import { makeZip, readZip } from './zip.js?v=4';
-import { decodeCsv, parseCsv, toCsv } from './csv.js?v=4';
+import * as db from './db.js?v=5';
+import { makeZip, readZip } from './zip.js?v=5';
+import { decodeCsv, parseCsv, toCsv } from './csv.js?v=5';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -46,6 +46,7 @@ const ICONS = {
   alert: P('M10.3 4.6 3 17.5A2 2 0 0 0 4.7 20.5h14.6a2 2 0 0 0 1.7-3L13.7 4.6a2 2 0 0 0-3.4 0zM12 9.5v4M12 17h.01'),
   archive: P('M3.5 4.5h17v4h-17zM5 8.5V19a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19V8.5M10 12.5h4'),
   table: `<rect x="3.5" y="4.5" width="17" height="15" rx="2"/>` + P('M3.5 9.5h17M3.5 14.5h17M9.5 9.5v10'),
+  layers: P('m12 3.5 8.5 4.5-8.5 4.5L3.5 8zM3.5 12.5 12 17l8.5-4.5M3.5 16.5 12 21l8.5-4.5'),
   phone: `<rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/>` + P('M11 18h2'),
   // 場所用
   box: P('M20.5 7.5 12 3 3.5 7.5v9L12 21l8.5-4.5zM3.5 7.5 12 12l8.5-4.5M12 12v9'),
@@ -307,7 +308,7 @@ function locView(id) {
   if (!l) return notFound();
   setHeader(l.name, {
     back: l.parentId ? `#/loc/${l.parentId}` : '#/',
-    actions: iconBtn(`#/label/${id}`, 'qr', 'QRラベル') + iconBtn(`#/loc/${id}/edit`, 'edit', '編集'),
+    actions: iconBtn(`#/bulk?loc=${id}`, 'table', '一覧で編集') + iconBtn(`#/label/${id}`, 'qr', 'QRラベル') + iconBtn(`#/loc/${id}/edit`, 'edit', '編集'),
   });
   const kids = childLocs(id);
   const its = itemsIn(id);
@@ -623,18 +624,18 @@ function searchView(_, q) {
       const hay = [it.name, it.note, ...(it.tags ?? []), pathText(it.locationId)].join(' ').toLowerCase();
       return words.every(w => hay.includes(w));
     }).sort(byName) : [];
-    $view.querySelector('#results').innerHTML = !active
-      ? `<div style="margin-top:20px">${empty('search', '何を探しますか？', tagList.length ? 'キーワードを入力するか、上のタグを選んでください' : 'キーワードを入力してください')}</div>`
-      : hits.length
-        ? `<div class="sec-head" style="margin-top:22px"><h2>${hits.length} 件見つかりました</h2><span class="spacer"></span>${viewToggle(mode)}</div>${itemsBlock(hits, mode, true)}`
-        : `<div style="margin-top:20px">${empty('search', '見つかりませんでした', '別のことばで試してみてください')}</div>`;
-    bindViewToggle();
-    hydratePhotos();
-    // 戻ったときに検索条件が残るように URL に反映
     const p = new URLSearchParams();
     if (text) p.set('q', text);
     tags.forEach(t => p.append('tag', t));
     const qs = p.toString();
+    $view.querySelector('#results').innerHTML = !active
+      ? `<div style="margin-top:20px">${empty('search', '何を探しますか？', tagList.length ? 'キーワードを入力するか、上のタグを選んでください' : 'キーワードを入力してください')}</div>`
+      : hits.length
+        ? `<div class="sec-head" style="margin-top:22px"><h2>${hits.length} 件</h2><span class="spacer"></span><a class="link" href="#/bulk?${qs}">${ic('table')}一覧で編集</a>${viewToggle(mode)}</div>${itemsBlock(hits, mode, true)}`
+        : `<div style="margin-top:20px">${empty('search', '見つかりませんでした', '別のことばで試してみてください')}</div>`;
+    bindViewToggle();
+    hydratePhotos();
+    // 戻ったときに検索条件が残るように URL に反映
     history.replaceState(null, '', `#/search${qs ? '?' + qs : ''}`);
   }
   $q.oninput = () => { text = $q.value; draw(); };
@@ -830,6 +831,7 @@ async function settingsView() {
     <div class="group-title">まとめて登録</div>
     <div class="group">
       <button class="row-btn" id="csv"><span class="lead" style="background:#f59e0b">${ic('table')}</span><span>CSV ファイルから追加</span>${ic('chevR', 'row-chev')}</button>
+      <a class="row-btn" href="#/bulk"><span class="lead" style="background:#0ea5e9">${ic('table')}</span><span>すべてのアイテムを一覧で編集</span>${ic('chevR', 'row-chev')}</a>
       <button class="row-btn" id="csvTemplate"><span class="lead" style="background:#64748b">${ic('download')}</span><span>ひな形の CSV をダウンロード</span>${ic('chevR', 'row-chev')}</button>
     </div>
     <p class="footnote">PC の Excel や Google スプレッドシートで「名前・数量・場所・タグ・メモ」を1行に1つずつ入力し、CSV で保存して読み込みます。場所は「押し入れ/箱A」のように書くと、まだない場所は自動で作ります。</p>
@@ -847,7 +849,7 @@ async function settingsView() {
     <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
 
     <div class="group-title">このアプリについて</div>
-    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.3</span></div></div>`;
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.4</span></div></div>`;
 
   const $export = $view.querySelector('#export');
   $export.onclick = async () => {
@@ -1049,6 +1051,224 @@ function downloadFile(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 }
 
+// ---------- 一覧で編集（表の形でまとめて直す・選んだものに一括でタグ付けなど） ----------
+
+// 下から出てくるシート。OK なら dialog 要素、キャンセルなら null を返す
+function sheet(title, body, okLabel) {
+  const d = document.getElementById('dlg');
+  d.innerHTML = `<form method="dialog" class="sheet-body">
+    <h3>${title}</h3>${body}
+    <div class="save-row"><button type="button" class="btn" data-cancel>キャンセル</button><button value="ok" class="btn primary">${okLabel}</button></div>
+  </form>`;
+  d.querySelector('[data-cancel]').onclick = () => d.close('cancel');
+  d.returnValue = '';
+  d.showModal();
+  return new Promise(res => d.addEventListener('close', () => res(d.returnValue === 'ok' ? d : null), { once: true }));
+}
+const pickLocation = async (title, current = null) => {
+  const d = await sheet(title, `<div class="group"><label class="frow"><span>場所</span><select name="loc"><option value="">場所未設定</option>${locOptions(current)}</select></label></div>`, '移動する');
+  return d ? { locationId: d.querySelector('[name=loc]').value || null } : null;
+};
+
+function bulkView(_, q) {
+  const locId = q.get('loc');
+  const inScope = locId ? new Set(descendantIds(locId)) : null;
+  const tags = q.getAll('tag');
+  let text = q.get('q') ?? '';
+  const selected = new Set();
+  setHeader('一覧で編集', { back: locId ? `#/loc/${locId}` : '#/', always: true });
+  const scope = locId
+    ? `${esc(pathText(locId))}（中の場所も含む）`
+    : text || tags.length ? '検索結果' : 'すべてのアイテム';
+
+  $view.innerHTML = `
+    <p class="meta" style="margin:4px 2px 10px">${ic('layers')}${scope}${tags.length ? '　' + tags.map(t => '#' + esc(t)).join(' ') : ''}</p>
+    <div class="search-field"><label>${ic('search')}<input id="bq" type="search" placeholder="この中で絞り込む" value="${esc(text)}" autocomplete="off"></label></div>
+    <div class="bulk-sub">
+      <label class="chk"><input type="checkbox" id="all"><span>表示中をすべて選択</span></label>
+      <span id="cnt"></span>
+    </div>
+    <div class="sheet-wrap"><table class="grid">
+      <thead><tr><th class="c-sel"></th><th class="c-name">名前</th><th class="c-qty">数量</th><th class="c-loc">場所</th><th class="c-tags">タグ</th><th class="c-note">メモ</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+    <p class="footnote">セルをタップするとその場で直せます。入力し終えると自動で保存されます。</p>
+    <div class="bulkbar" id="bar">
+      <span class="sel-count" id="selcnt"></span>
+      <div class="bulk-actions">
+        <button type="button" data-act="tagAdd">${ic('tag')}<span>タグ追加</span></button>
+        <button type="button" data-act="tagRemove">${ic('x')}<span>タグを外す</span></button>
+        <button type="button" data-act="move">${ic('pin')}<span>場所を移動</span></button>
+        <button type="button" data-act="del" class="danger">${ic('trash')}<span>削除</span></button>
+      </div>
+    </div>
+    <dialog id="dlg" class="sheet-dlg"></dialog>`;
+
+  const $rows = $view.querySelector('#rows');
+  const $all = $view.querySelector('#all');
+  let visible = [];
+
+  const row = it => `<tr data-id="${it.id}" class="${selected.has(it.id) ? 'on' : ''}">
+    <td class="c-sel"><input type="checkbox" class="sel" ${selected.has(it.id) ? 'checked' : ''} aria-label="選択"></td>
+    <td class="c-name"><input data-f="name" value="${esc(it.name)}" aria-label="名前"></td>
+    <td class="c-qty"><input data-f="quantity" type="number" inputmode="numeric" min="0" value="${it.quantity ?? 1}" aria-label="数量"></td>
+    <td class="c-loc"><button type="button" class="cell-btn" data-pick>${esc(pathText(it.locationId))}</button></td>
+    <td class="c-tags"><input data-f="tags" value="${esc((it.tags ?? []).join(' '))}" placeholder="—" aria-label="タグ"></td>
+    <td class="c-note"><textarea data-f="note" rows="1" placeholder="—" aria-label="メモ">${esc(it.note)}</textarea></td>
+  </tr>`;
+
+  function draw() {
+    const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+    visible = I.filter(it => {
+      if (inScope && !inScope.has(it.locationId)) return false;
+      if (tags.some(t => !(it.tags ?? []).includes(t))) return false;
+      const hay = [it.name, it.note, ...(it.tags ?? []), pathText(it.locationId)].join(' ').toLowerCase();
+      return words.every(w => hay.includes(w));
+    }).sort(byName);
+    $rows.innerHTML = visible.length
+      ? visible.map(row).join('')
+      : `<tr><td colspan="6" class="grid-empty">該当するアイテムがありません</td></tr>`;
+    drawSelection();
+  }
+  function drawSelection() {
+    // 絞り込みで見えなくなったものは選択から外す
+    const ids = new Set(visible.map(i => i.id));
+    for (const id of selected) if (!ids.has(id)) selected.delete(id);
+    $view.querySelector('#cnt').textContent = `${visible.length} 件`;
+    $view.querySelector('#selcnt').textContent = selected.size ? `${selected.size} 件を選択中` : '行を選ぶと、まとめて操作できます';
+    $view.querySelectorAll('[data-act]').forEach(b => { b.disabled = !selected.size; });
+    $all.checked = visible.length > 0 && selected.size === visible.length;
+    $all.indeterminate = selected.size > 0 && selected.size < visible.length;
+  }
+
+  $view.querySelector('#bq').oninput = e => { text = e.target.value; draw(); };
+  $all.onchange = () => {
+    if ($all.checked) visible.forEach(i => selected.add(i.id));
+    else selected.clear();
+    $rows.querySelectorAll('tr[data-id]').forEach(tr => {
+      const on = selected.has(tr.dataset.id);
+      tr.classList.toggle('on', on);
+      tr.querySelector('.sel').checked = on;
+    });
+    drawSelection();
+  };
+
+  // セルの編集は、入力し終えたとき（フォーカスが外れたとき）に1件ずつ保存する
+  $rows.addEventListener('change', async e => {
+    const el = e.target;
+    const tr = el.closest('tr[data-id]');
+    if (!tr) return;
+    const it = item(tr.dataset.id);
+    if (el.classList.contains('sel')) {
+      el.checked ? selected.add(it.id) : selected.delete(it.id);
+      tr.classList.toggle('on', el.checked);
+      return drawSelection();
+    }
+    const f = el.dataset.f;
+    let v = el.value;
+    if (f === 'name') {
+      v = v.trim();
+      if (!v) { el.value = it.name; return toast('名前は空にできません', 'error'); }
+    }
+    if (f === 'quantity') v = Math.max(0, parseInt(v, 10) || 0);
+    if (f === 'tags') v = parseTags(v);
+    if (f === 'note') v = v.trim();
+    if (JSON.stringify(v) === JSON.stringify(it[f] ?? (f === 'tags' ? [] : ''))) return;
+    Object.assign(it, { [f]: v, updatedAt: Date.now() });
+    el.value = Array.isArray(v) ? v.join(' ') : v;
+    await db.put('items', it);
+    el.classList.remove('saved');
+    void el.offsetWidth;
+    el.classList.add('saved');
+  });
+  // メモ欄は内容に合わせて高さを変える
+  $rows.addEventListener('input', e => {
+    if (e.target.tagName !== 'TEXTAREA') return;
+    e.target.style.height = 'auto';
+    e.target.style.height = e.target.scrollHeight + 'px';
+  });
+  $rows.addEventListener('click', async e => {
+    const b = e.target.closest('[data-pick]');
+    if (!b) return;
+    const it = item(b.closest('tr').dataset.id);
+    const r = await pickLocation(`「${esc(it.name)}」の場所`, it.locationId);
+    if (!r) return;
+    Object.assign(it, r, { updatedAt: Date.now() });
+    await db.put('items', it);
+    b.textContent = pathText(it.locationId);
+  });
+
+  const targets = () => I.filter(i => selected.has(i.id));
+  const saveAll = async (list, msg) => {
+    const now = Date.now();
+    await db.write(s => list.forEach(it => { it.updatedAt = now; s.items.put(it); }));
+    toast(msg);
+    draw();
+  };
+  const actions = {
+    async tagAdd() {
+      const list = targets();
+      const d = await sheet(`${list.length} 件にタグを追加`, `
+        <div class="group"><label class="frow col"><input name="tags" placeholder="追加するタグ（スペース区切り）" autocomplete="off"></label></div>
+        ${allTags().length ? `<div class="chips sheet-chips">${allTags().map(t => `<button type="button" class="chip" data-t="${esc(t)}">#${esc(t)}</button>`).join('')}</div>` : ''}`, '追加する');
+      if (!d) return;
+      const add = parseTags(d.querySelector('[name=tags]').value);
+      if (!add.length) return;
+      list.forEach(it => { it.tags = [...new Set([...(it.tags ?? []), ...add])]; });
+      await saveAll(list, `${list.length} 件に ${add.map(t => '#' + t).join(' ')} を追加しました`);
+    },
+    async tagRemove() {
+      const list = targets();
+      const present = [...new Set(list.flatMap(i => i.tags ?? []))].sort((a, b) => a.localeCompare(b, 'ja'));
+      if (!present.length) return toast('選んだアイテムにはタグがありません', 'error');
+      const d = await sheet(`${list.length} 件からタグを外す`,
+        `<div class="chips sheet-chips">${present.map(t => `<label class="chip toggle"><input type="checkbox" name="t" value="${esc(t)}">#${esc(t)}</label>`).join('')}</div>`, '外す');
+      if (!d) return;
+      const rm = [...d.querySelectorAll('[name=t]:checked')].map(c => c.value);
+      if (!rm.length) return;
+      list.forEach(it => { it.tags = (it.tags ?? []).filter(t => !rm.includes(t)); });
+      await saveAll(list, `${list.length} 件から ${rm.map(t => '#' + t).join(' ')} を外しました`);
+    },
+    async move() {
+      const list = targets();
+      const r = await pickLocation(`${list.length} 件の場所を移動`);
+      if (!r) return;
+      list.forEach(it => { it.locationId = r.locationId; });
+      await saveAll(list, `${list.length} 件を「${pathText(r.locationId)}」に移動しました`);
+    },
+    async del() {
+      const list = targets();
+      if (!confirm(`${list.length} 件のアイテムを削除します。写真も消えます。よろしいですか？`)) return;
+      await db.write(s => list.forEach(it => {
+        s.items.delete(it.id);
+        for (const p of it.photos ?? []) { s.photos.delete(p); s.thumbs.delete(p); }
+      }));
+      list.forEach(it => (it.photos ?? []).forEach(forgetPhoto));
+      list.forEach(it => selected.delete(it.id));
+      await load();
+      toast(`${list.length} 件を削除しました`);
+      draw();
+    },
+  };
+  $view.querySelector('#bar').onclick = e => {
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act && selected.size) actions[act]();
+  };
+  // タグ追加シートの候補チップ → 入力欄に足す
+  $view.querySelector('#dlg').addEventListener('click', e => {
+    const t = e.target.closest('[data-t]')?.dataset.t;
+    if (!t) return;
+    const input = e.currentTarget.querySelector('[name=tags]');
+    const cur = parseTags(input.value);
+    input.value = (cur.includes(t) ? cur.filter(x => x !== t) : [...cur, t]).join(' ');
+    e.target.closest('[data-t]').classList.toggle('on', !cur.includes(t));
+  });
+
+  draw();
+  // 開いた時点で、複数行のメモが全部見えるように高さを合わせる
+  $rows.querySelectorAll('textarea').forEach(t => { if (t.value.includes('\n')) t.style.height = t.scrollHeight + 'px'; });
+}
+
 function notFound() {
   setHeader('見つかりません', { back: '#/', always: true });
   $view.innerHTML = `<div style="margin-top:12px">${empty('info', '見つかりませんでした', '削除されたか、別の端末のデータです')}</div>`;
@@ -1080,6 +1300,7 @@ const routes = [
   [/^\/scan$/, scanView, 'scan'],
   [/^\/settings$/, settingsView, 'settings'],
   [/^\/import$/, importView, 'settings', true],
+  [/^\/bulk$/, bulkView, 'home', true],
 ];
 
 let cleanup = null;
