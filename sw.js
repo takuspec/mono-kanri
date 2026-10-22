@@ -1,6 +1,6 @@
 // オフラインでも開けるようにアプリ本体をキャッシュする。
 // ネットにつながるときは最新を取りに行き、つながらないときはキャッシュを使う。
-const CACHE = 'mono-kanri-v5';
+const CACHE = 'mono-kanri-v6';
 const ASSETS = [
   './', 'index.html', 'styles.css', 'app.js', 'db.js', 'zip.js', 'csv.js', 'manifest.webmanifest',
   'vendor/qrcode.js', 'vendor/jsQR.js',
@@ -26,6 +26,8 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+  // PC サーバーとのやりとり（受け渡しのファイルなど）はキャッシュしない
+  if (url.pathname.includes('/api/') || url.pathname.includes('/t/')) return;
   // ブラウザの HTTP キャッシュに古いファイルが残っていると、新旧のファイルが混ざって動かなくなるので、
   // 毎回サーバーに更新があるか確かめる（変わっていなければ通信は小さく済む）
   e.respondWith(

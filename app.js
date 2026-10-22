@@ -1,6 +1,6 @@
-import * as db from './db.js?v=5';
-import { makeZip, readZip } from './zip.js?v=5';
-import { decodeCsv, parseCsv, toCsv } from './csv.js?v=5';
+import * as db from './db.js?v=6';
+import { makeZip, readZip } from './zip.js?v=6';
+import { decodeCsv, parseCsv, toCsv } from './csv.js?v=6';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -375,6 +375,7 @@ function locEdit(id, q) {
     const v = { ...l, name: f.name.value.trim(), parentId: f.parentId.value || null, note: f.note.value.trim(), icon, color };
     if (!v.name) return;
     v.createdAt ??= Date.now();
+    v.updatedAt = Date.now();
     await db.put('locations', v);
     await load();
     toast('保存しました');
@@ -387,11 +388,13 @@ function locEdit(id, q) {
       ? `「${l.name}」を削除します。中の場所 ${kids.length} 件とアイテム ${its.length} 件は${dest}に移動します。`
       : `「${l.name}」を削除しますか？`;
     if (!confirm(msg)) return;
+    const now = Date.now();
     await db.write(s => {
-      for (const k of kids) s.locations.put({ ...k, parentId: l.parentId ?? null });
-      for (const i of its) s.items.put({ ...i, locationId: l.parentId ?? null });
+      for (const k of kids) s.locations.put({ ...k, parentId: l.parentId ?? null, updatedAt: now });
+      for (const i of its) s.items.put({ ...i, locationId: l.parentId ?? null, updatedAt: now });
       s.locations.delete(id);
     });
+    await addTombstones([id]);
     await load();
     toast('削除しました');
     location.replace(l.parentId ? `#/loc/${l.parentId}` : '#/');
@@ -452,6 +455,7 @@ function itemView(id) {
       s.items.delete(id);
       for (const p of it.photos ?? []) { s.photos.delete(p); s.thumbs.delete(p); }
     });
+    await addTombstones([id]);
     (it.photos ?? []).forEach(forgetPhoto);
     await load();
     toast('削除しました');
@@ -715,6 +719,10 @@ function scanView() {
       location.hash = `#/${r.kind}/${r.id}`;
       return true;
     }
+    if (!r && /^https?:\/\//.test(text)) {
+      msg.innerHTML = `<a class="btn primary" href="${esc(text)}" target="_blank" rel="noopener">${ic('download')}QR のページを開く</a>`;
+      return true;
+    }
     msg.textContent = r ? 'この端末には登録されていないラベルです' : 'このアプリのQRではないようです';
     return false;
   }
@@ -765,15 +773,18 @@ function scanView() {
 const DAY = 24 * 60 * 60 * 1000;
 
 // 写真ごと1つの ZIP にまとめる。写真は Blob のままつなぐので、枚数が多くてもメモリを食わない
-async function exportBackup() {
-  const [photos, thumbs] = await Promise.all([db.getAll('photos'), db.getAll('thumbs')]);
-  const data = { app: 'mono-kanri', version: 2, exportedAt: new Date().toISOString(), locations: L, items: I };
-  const zip = await makeZip([
+async function buildBackupZip() {
+  const [photos, thumbs, deleted] = await Promise.all([db.getAll('photos'), db.getAll('thumbs'), db.getMeta('deleted')]);
+  const data = { app: 'mono-kanri', version: 3, exportedAt: new Date().toISOString(), locations: L, items: I, deleted: deleted ?? {} };
+  return makeZip([
     { name: 'data.json', blob: new Blob([JSON.stringify(data)], { type: 'application/json' }) },
     ...photos.map(p => ({ name: `photos/${p.id}.jpg`, blob: p.blob })),
     ...thumbs.map(t => ({ name: `thumbs/${t.id}.jpg`, blob: t.blob })),
   ]);
-  const name = `mono-kanri-${new Date().toISOString().slice(0, 10)}.zip`;
+}
+async function exportBackup() {
+  const zip = await buildBackupZip();
+  const name = `mono-kanri-${new Date().toLocaleDateString('sv-SE')}.zip`;
   const file = new File([zip], name, { type: 'application/zip' });
   if (navigator.canShare?.({ files: [file] })) {
     try {
@@ -806,7 +817,7 @@ async function readBackup(file) {
     for (const p of data.photos ?? []) photos.push({ id: p.id, blob: await (await fetch(p.data)).blob() });
   }
   if (data.app !== 'mono-kanri' || !Array.isArray(data.items) || !Array.isArray(data.locations)) throw new Error('not a backup');
-  return { locations: data.locations, items: data.items, photos, thumbs };
+  return { locations: data.locations, items: data.items, deleted: data.deleted ?? {}, photos, thumbs };
 }
 
 async function settingsView() {
@@ -823,10 +834,15 @@ async function settingsView() {
     <div class="group">
       <button class="row-btn" id="export"><span class="lead">${ic('download')}</span><span>バックアップを書き出す</span>${ic('chevR', 'row-chev')}</button>
       <button class="row-btn" id="import"><span class="lead" style="background:#14b8a6">${ic('upload')}</span><span>バックアップから復元</span>${ic('chevR', 'row-chev')}</button>
+      <button class="row-btn" id="merge"><span class="lead" style="background:#22c55e">${ic('layers')}</span><span>ファイルを合わせて取り込む</span>${ic('chevR', 'row-chev')}</button>
       <div class="kv-row"><span>前回のバックアップ</span><span>${last ? fmtDate(last) : 'まだありません'}</span></div>
     </div>
-    <p class="footnote">写真ごと1つの ZIP ファイルにまとめます。iPhone は「"ファイル"に保存」、Android は Google ドライブなどに保存しておくと、機種変更のときもそのまま復元できます。</p>
+    <p class="footnote">写真ごと1つの ZIP ファイルにまとめます。iPhone は「"ファイル"に保存」、Android は Google ドライブなどに保存しておくと、機種変更のときもそのまま復元できます。<br>「復元」は今のデータを全部置き換えます。PC から送ったファイルなど、両方で編集したデータは「合わせて取り込む」を使うと、新しく直した方を残して合わせます。</p>
     <input type="file" id="file" accept=".zip,application/zip,.json,application/json" hidden>
+    <input type="file" id="mergeFile" accept=".zip,application/zip" hidden>
+    ${pcServer ? `<div class="group-title">スマホと受け渡し</div>
+    <div class="group"><a class="row-btn" href="#/transfer"><span class="lead" style="background:#22c55e">${ic('phone')}</span><span>スマホとデータを受け渡す</span>${ic('chevR', 'row-chev')}</a></div>
+    <p class="footnote">PC サーバー（server.py）で開いているときだけ表示されます。</p>` : ''}
 
     <div class="group-title">まとめて登録</div>
     <div class="group">
@@ -849,7 +865,7 @@ async function settingsView() {
     <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
 
     <div class="group-title">このアプリについて</div>
-    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.4</span></div></div>`;
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.5</span></div></div>`;
 
   const $export = $view.querySelector('#export');
   $export.onclick = async () => {
@@ -889,6 +905,14 @@ async function settingsView() {
     ensureThumbs();
     toast('復元しました');
     location.hash = '#/';
+  };
+
+  const $mergeFile = $view.querySelector('#mergeFile');
+  $view.querySelector('#merge').onclick = () => $mergeFile.click();
+  $mergeFile.onchange = async () => {
+    const f = $mergeFile.files[0];
+    $mergeFile.value = '';
+    if (f && await mergeFromFile(f)) location.hash = '#/';
   };
 
   const $csv = $view.querySelector('#csvFile');
@@ -988,7 +1012,7 @@ function planImport(rows) {
     for (const name of r.path) {
       let l = all.find(x => (x.parentId ?? null) === pid && x.name === name);
       if (!l) {
-        l = { id: uid(), name, parentId: pid, note: '', icon: 'box', createdAt: now };
+        l = { id: uid(), name, parentId: pid, note: '', icon: 'box', createdAt: now, updatedAt: now };
         all.push(l);
         newLocs.push(l);
       }
@@ -1243,6 +1267,7 @@ function bulkView(_, q) {
         s.items.delete(it.id);
         for (const p of it.photos ?? []) { s.photos.delete(p); s.thumbs.delete(p); }
       }));
+      await addTombstones(list.map(it => it.id));
       list.forEach(it => (it.photos ?? []).forEach(forgetPhoto));
       list.forEach(it => selected.delete(it.id));
       await load();
@@ -1267,6 +1292,195 @@ function bulkView(_, q) {
   draw();
   // 開いた時点で、複数行のメモが全部見えるように高さを合わせる
   $rows.querySelectorAll('textarea').forEach(t => { if (t.value.includes('\n')) t.style.height = t.scrollHeight + 'px'; });
+}
+
+// ---------- 合わせて取り込む（PC とスマホのファイル受け渡し） ----------
+// 削除したものの id と日時を覚えておき、相手のファイルにまだ残っていても復活しないようにする
+async function addTombstones(ids) {
+  const now = Date.now();
+  const deleted = (await db.getMeta('deleted')) ?? {};
+  for (const id of ids) deleted[id] = now;
+  await db.setMeta('deleted', deleted);
+}
+
+const stamp = r => r.updatedAt ?? r.createdAt ?? 0;
+
+// ファイルの中身と今のデータを、1件ずつ「新しく編集された方」を残して合わせる
+async function planMerge(data) {
+  // ほかのタブで編集していても取りこぼさないよう、保存されている最新の内容から合わせる
+  await load();
+  const deleted = { ...((await db.getMeta('deleted')) ?? {}) };
+  for (const [id, t] of Object.entries(data.deleted ?? {})) deleted[id] = Math.max(deleted[id] ?? 0, t);
+  const replaced = new Set();
+  const mergeList = (local, remote) => {
+    const map = new Map(local.map(r => [r.id, r]));
+    for (const r of remote) {
+      const l = map.get(r.id);
+      if (!l || stamp(r) > stamp(l)) {
+        if (l) replaced.add(r.id);
+        map.set(r.id, { ...r });
+      }
+    }
+    for (const [id, r] of map) if (deleted[id] != null && deleted[id] >= stamp(r)) map.delete(id);
+    return [...map.values()];
+  };
+  const locs = mergeList(L, data.locations);
+  const items = mergeList(I, data.items);
+
+  // 消えた場所の中にあったものは、いちばん上・場所未設定へ。親子がループしたら切る
+  const byId = new Map(locs.map(l => [l.id, l]));
+  for (const l of locs) if (l.parentId && !byId.has(l.parentId)) l.parentId = null;
+  for (const l of locs) {
+    const seen = new Set([l.id]);
+    for (let p = byId.get(l.parentId); p; p = byId.get(p.parentId)) {
+      if (p.id === l.id) { l.parentId = null; break; }
+      if (seen.has(p.id)) break;
+      seen.add(p.id);
+    }
+  }
+  for (const it of items) if (it.locationId && !byId.has(it.locationId)) it.locationId = null;
+
+  // 写真は、残るアイテムが使っていて、まだこの端末にないものだけ取り込む
+  const need = new Set(items.flatMap(i => i.photos ?? []));
+  const [havePhotos, haveThumbs] = (await Promise.all([db.getAllKeys('photos'), db.getAllKeys('thumbs')])).map(k => new Set(k));
+  const before = new Set([...L, ...I].map(r => r.id));
+  const after = new Set([...locs, ...items].map(r => r.id));
+  return {
+    locs, items, deleted,
+    addPhotos: data.photos.filter(p => need.has(p.id) && !havePhotos.has(p.id)),
+    addThumbs: (data.thumbs ?? []).filter(t => need.has(t.id) && !haveThumbs.has(t.id)),
+    dropPhotos: [...havePhotos].filter(id => !need.has(id)),
+    stats: {
+      added: [...after].filter(id => !before.has(id)).length,
+      updated: [...replaced].filter(id => after.has(id)).length,
+      removed: [...before].filter(id => !after.has(id)).length,
+    },
+  };
+}
+
+async function applyMerge(plan) {
+  await db.write(s => {
+    s.locations.clear();
+    plan.locs.forEach(l => s.locations.put(l));
+    s.items.clear();
+    plan.items.forEach(i => s.items.put(i));
+    plan.addPhotos.forEach(p => s.photos.put(p));
+    plan.addThumbs.forEach(t => s.thumbs.put(t));
+    plan.dropPhotos.forEach(id => { s.photos.delete(id); s.thumbs.delete(id); });
+    s.meta.put({ key: 'deleted', value: plan.deleted });
+  });
+  plan.dropPhotos.forEach(forgetPhoto);
+  await load();
+  ensureThumbs();
+}
+
+const statsText = ({ added, updated, removed }) =>
+  added + updated + removed ? `追加 ${added}・更新 ${updated}・削除 ${removed}` : '変更はありません';
+
+// ファイルを選んで、確認してから合わせる（スマホでも PC でも使う）
+async function mergeFromFile(file, from = 'このファイル') {
+  let data;
+  try {
+    data = await readBackup(file);
+  } catch {
+    toast('このアプリのファイルではないようです', 'error');
+    return false;
+  }
+  const plan = await planMerge(data);
+  const { added, updated, removed } = plan.stats;
+  if (!added && !updated && !removed && !plan.addPhotos.length) {
+    toast(`${from}と同じ内容でした。変更はありません`);
+    return true;
+  }
+  if (!confirm(`${from}の内容を合わせます。\n\n追加 ${added} 件・更新 ${updated} 件・削除 ${removed} 件\n\n両方で同じものを直していたときは、あとから直した方が残ります。`)) return false;
+  await applyMerge(plan);
+  toast(`合わせました（${statsText(plan.stats)}）`);
+  return true;
+}
+
+// ---------- PC サーバー（python server.py）で開いているときだけ使う受け渡し画面 ----------
+let pcServer = null; // { uploadUrl, ip, port }
+
+const qrSvg = text => {
+  const qr = qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+  return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+};
+
+function transferView() {
+  if (!pcServer) return notFound();
+  setHeader('スマホと受け渡し', { back: '#/settings', always: true });
+  $view.innerHTML = `
+    <div class="group-title">PC → スマホ</div>
+    <div class="panel">
+      <ol class="steps">
+        <li>下のボタンで、スマホに送るファイルを用意します</li>
+        <li>出てきた QR コードをスマホのカメラで読み、ファイルをダウンロードします</li>
+        <li>スマホのモノ管理で「設定 → ファイルを合わせて取り込む」を押し、そのファイルを選びます</li>
+      </ol>
+      <button class="btn primary block" id="mk">${ic('phone')}スマホに送るファイルを用意する</button>
+      <div id="out"></div>
+    </div>
+
+    <div class="group-title">スマホ → PC</div>
+    <div class="panel">
+      <ol class="steps">
+        <li>スマホのモノ管理で「設定 → バックアップを書き出す」を押し、「"ファイル"に保存」などで保存します</li>
+        <li>この QR コードをスマホのカメラで読み、開いたページでそのファイルを送ります</li>
+        <li>届くと下に出るので、「合わせて取り込む」を押します</li>
+      </ol>
+      <div class="qr-box">${qrSvg(pcServer.uploadUrl)}<p class="url">${esc(pcServer.uploadUrl)}</p></div>
+      <div id="inbox"></div>
+    </div>
+    <p class="footnote">スマホと PC が同じ Wi-Fi につながっている必要があります。スマホで開けないときは、Windows のファイアウォールで Python の通信を「プライベート ネットワーク」で許可してください。</p>`;
+
+  const $mk = $view.querySelector('#mk');
+  $mk.onclick = async () => {
+    $mk.disabled = true;
+    $mk.lastChild.textContent = 'ファイルを用意しています…';
+    try {
+      const res = await fetch('api/outbox', { method: 'POST', body: await buildBackupZip() });
+      if (!res.ok) throw new Error(res.status);
+      const { downloadUrl } = await res.json();
+      $view.querySelector('#out').innerHTML = `
+        <div class="qr-box">${qrSvg(downloadUrl)}<p class="url">${esc(downloadUrl)}</p></div>
+        <p class="footnote" style="text-align:center">用意した時点の内容です。PC で編集したら、もう一度ボタンを押してください。</p>`;
+    } catch {
+      toast('ファイルを用意できませんでした。server.py が動いているか確認してください', 'error');
+    } finally {
+      $mk.disabled = false;
+      $mk.lastChild.textContent = 'スマホに送るファイルを用意し直す';
+    }
+  };
+
+  // スマホから届いたファイルを2秒ごとに確かめる
+  const $inbox = $view.querySelector('#inbox');
+  let shown = null;
+  async function poll() {
+    const files = await fetch('api/inbox').then(r => (r.ok ? r.json() : [])).catch(() => []);
+    const key = files.map(f => f.name).join();
+    if (key === shown) return;
+    shown = key;
+    $inbox.innerHTML = files.length
+      ? `<div class="group" style="margin-top:14px">${files.map(f => `
+          <div class="kv-row"><span>${ic('download')} スマホから届いたファイル<br><small>${new Date(f.time).toLocaleString('ja-JP')}・${fmtBytes(f.size)}</small></span>
+          <button class="btn sm primary" data-merge="${esc(f.name)}">合わせて取り込む</button></div>`).join('')}</div>`
+      : '<p class="waiting">スマホからのファイルを待っています…</p>';
+  }
+  $inbox.onclick = async e => {
+    const name = e.target.closest('[data-merge]')?.dataset.merge;
+    if (!name) return;
+    const blob = await fetch(`api/inbox/${encodeURIComponent(name)}`).then(r => r.blob());
+    if (await mergeFromFile(blob, 'スマホから届いたファイル')) {
+      await fetch(`api/inbox/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      shown = null;
+      poll();
+    }
+  };
+  poll();
+  const timer = setInterval(poll, 2000);
+  return () => clearInterval(timer);
 }
 
 function notFound() {
@@ -1301,6 +1515,7 @@ const routes = [
   [/^\/settings$/, settingsView, 'settings'],
   [/^\/import$/, importView, 'settings', true],
   [/^\/bulk$/, bulkView, 'home', true],
+  [/^\/transfer$/, transferView, 'settings'],
 ];
 
 let cleanup = null;
@@ -1332,6 +1547,8 @@ async function render() {
 const onScroll = () => document.body.classList.toggle('scrolled', window.scrollY > 28);
 window.addEventListener('scroll', onScroll, { passive: true });
 window.addEventListener('hashchange', render);
+// PC サーバー（server.py）から開いているかを確かめる。GitHub Pages では見つからないので null のまま
+pcServer = await fetch('api/ping', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null);
 await load();
 await render();
 ensureThumbs();
