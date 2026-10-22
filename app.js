@@ -1,6 +1,6 @@
-import * as db from './db.js?v=6';
-import { makeZip, readZip } from './zip.js?v=6';
-import { decodeCsv, parseCsv, toCsv } from './csv.js?v=6';
+import * as db from './db.js?v=7';
+import { makeZip, readZip } from './zip.js?v=7';
+import { decodeCsv, parseCsv, toCsv } from './csv.js?v=7';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -328,7 +328,8 @@ function locView(id) {
     ${secHead('アイテム', its.length, its.length ? viewToggle(mode) : '')}
     ${its.length
       ? itemsBlock(its, mode)
-      : empty('image', 'まだアイテムがありません', '下の ＋ ボタンから、写真を撮って追加できます')}`;
+      : empty('image', 'まだアイテムがありません', '下の ＋ ボタンから、写真を撮って追加できます')}
+    <a class="add-tile" href="#/text?loc=${id}" style="margin-top:12px">${ic('note')}テキストでまとめて追加</a>`;
   bindViewToggle();
 }
 
@@ -846,6 +847,7 @@ async function settingsView() {
 
     <div class="group-title">まとめて登録</div>
     <div class="group">
+      <a class="row-btn" href="#/text"><span class="lead" style="background:#a855f7">${ic('note')}</span><span>テキストでまとめて追加</span>${ic('chevR', 'row-chev')}</a>
       <button class="row-btn" id="csv"><span class="lead" style="background:#f59e0b">${ic('table')}</span><span>CSV ファイルから追加</span>${ic('chevR', 'row-chev')}</button>
       <a class="row-btn" href="#/bulk"><span class="lead" style="background:#0ea5e9">${ic('table')}</span><span>すべてのアイテムを一覧で編集</span>${ic('chevR', 'row-chev')}</a>
       <button class="row-btn" id="csvTemplate"><span class="lead" style="background:#64748b">${ic('download')}</span><span>ひな形の CSV をダウンロード</span>${ic('chevR', 'row-chev')}</button>
@@ -865,7 +867,7 @@ async function settingsView() {
     <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
 
     <div class="group-title">このアプリについて</div>
-    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.5</span></div></div>`;
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.6</span></div></div>`;
 
   const $export = $view.querySelector('#export');
   $export.onclick = async () => {
@@ -1030,10 +1032,108 @@ function planImport(rows) {
 
 let pendingImport = null;
 
+// ---------- テキストでまとめて追加（comfy-app の「まとめて登録」と同じ書き方） ----------
+// [押し入れ > フィギュア棚] #タグ   … この行から下は、この場所・このタグで登録する
+// 名前 ×2 #タグ = メモ              … 1行に1アイテム。×数・#タグ・= メモ は省略できる
+const TEXT_EXAMPLE = `[押し入れ > フィギュア棚] #キングダムハーツ #フィギュア
+KINGDOM HEARTS III ブリングアーツ ソラ
+KINGDOM HEARTS III ブリングアーツ リク ×2 = 1体は箱なし
+
+[リビング > テレビ台]
+延長コード ×3 #電気
+HDMIケーブル`;
+
+function parseText(text) {
+  let path = [];
+  let groupTags = [];
+  const rows = [];
+  for (const raw of text.split(/\r?\n/)) {
+    let line = raw.trim();
+    if (!line || line.startsWith('//')) continue;
+    const head = line.match(/^[[［](.*?)[\]］]\s*(.*)$/);
+    if (head) {
+      path = head[1].split(/\s*[>＞/／›]\s*/).filter(Boolean);
+      groupTags = (head[2].match(/[#＃][^\s#＃]+/g) ?? []).map(t => t.slice(1));
+      continue;
+    }
+    let note = '';
+    const eq = line.search(/[=＝]/);
+    if (eq >= 0) {
+      note = line.slice(eq + 1).trim();
+      line = line.slice(0, eq).trim();
+    }
+    const tags = [...groupTags];
+    line = line.replace(/(^|\s)[#＃]([^\s#＃]+)/g, (_, sp, t) => { tags.push(t); return ' '; }).trim();
+    let quantity = 1;
+    // 「×2」「x2」「*2」や「8本」「3個」のように末尾に書いた数は数量にする
+    line = line.replace(/\s*(?:[×✕xX*＊]\s*([0-9０-９]+)|\s([0-9０-９]+)\s*(?:個|本|枚|冊|つ|体|台|箱|着|足))$/, (_, a, b) => {
+      quantity = parseInt((a ?? b).normalize('NFKC'), 10);
+      return '';
+    }).trim();
+    if (line) rows.push({ name: line, quantity, path, tags: [...new Set(tags)], note });
+  }
+  return rows;
+}
+
+function textView(_, q) {
+  const locId = q.get('loc');
+  setHeader('テキストでまとめて追加', { back: locId ? `#/loc/${locId}` : '#/settings', always: true });
+  let draft = pref.get('textDraft', '');
+  if (!draft.trim() && locId && loc(locId)) draft = `[${locPath(locId).map(l => l.name).join(' > ')}]\n`;
+  $view.innerHTML = `
+    <details class="panel help" ${pref.get('textHelpSeen', '') ? '' : 'open'}>
+      <summary>${ic('info')}書き方</summary>
+      <ul>
+        <li>1行に1つずつ、名前を書きます</li>
+        <li><code>[押し入れ > フィギュア棚]</code> の行から下は、その場所に入ります（なければ作ります）</li>
+        <li>見出しの行に <code>#タグ</code> を付けると、その下の全部に付きます</li>
+        <li>名前のあとに <code>×2</code> や <code>8本</code> で数量、<code>#タグ</code> でタグ、<code>= メモ</code> でメモ</li>
+      </ul>
+      <pre>${esc(TEXT_EXAMPLE)}</pre>
+      <button type="button" class="link" id="useExample">${ic('edit')}この例を入れてみる</button>
+    </details>
+    <textarea id="txt" class="bigtext" spellcheck="false" placeholder="[場所 > 場所] #タグ&#10;名前&#10;名前 ×2">${esc(draft)}</textarea>
+    <p class="footnote" id="live"></p>
+    <div class="savebar"><button class="btn primary block" id="next">${ic('check')}内容を確認する</button></div>`;
+
+  const $txt = $view.querySelector('#txt');
+  const $live = $view.querySelector('#live');
+  const $next = $view.querySelector('#next');
+  function update() {
+    pref.set('textDraft', $txt.value);
+    const rows = parseText($txt.value);
+    const { newLocs } = planImport(rows);
+    $live.textContent = rows.length
+      ? `${rows.length} 件のアイテム${newLocs.length ? `・新しい場所 ${newLocs.length}` : ''}`
+      : '名前を1行に1つずつ書いてください';
+    $next.disabled = !rows.length;
+  }
+  $txt.oninput = update;
+  $view.querySelector('details').ontoggle = () => pref.set('textHelpSeen', '1');
+  $view.querySelector('#useExample').onclick = () => {
+    $txt.value = TEXT_EXAMPLE;
+    update();
+    $txt.focus();
+  };
+  $next.onclick = () => {
+    pendingImport = {
+      ...planImport(parseText($txt.value)), skipped: 0, fileName: 'テキストで入力',
+      title: 'テキストから追加', back: location.hash, onDone: () => pref.set('textDraft', ''),
+    };
+    location.hash = '#/import';
+  };
+  update();
+  if (!draft.trim() || draft.endsWith('\n')) {
+    $txt.focus();
+    $txt.setSelectionRange($txt.value.length, $txt.value.length);
+  }
+}
+
+
 function importView() {
   if (!pendingImport) return void location.replace('#/settings');
-  const { items, newLocs, skipped, pathOf, fileName } = pendingImport;
-  setHeader('CSVから追加', { back: '#/settings', always: true });
+  const { items, newLocs, skipped, pathOf, fileName, title = 'CSVから追加', back = '#/settings', onDone } = pendingImport;
+  setHeader(title, { back, always: true });
   const MAX = 100;
   const row = it => `<div class="row">
     <span class="row-media"><span class="ph-tile" style="--c:${hue(it.name)}">${initial(it.name)}</span></span>
@@ -1063,6 +1163,7 @@ function importView() {
       for (const it of items) s.items.put(it);
     });
     pendingImport = null;
+    onDone?.();
     await load();
     toast(`${items.length} 件を追加しました`);
     location.replace('#/');
@@ -1516,6 +1617,7 @@ const routes = [
   [/^\/import$/, importView, 'settings', true],
   [/^\/bulk$/, bulkView, 'home', true],
   [/^\/transfer$/, transferView, 'settings'],
+  [/^\/text$/, textView, 'home', true],
 ];
 
 let cleanup = null;
