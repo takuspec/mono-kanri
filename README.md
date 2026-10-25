@@ -29,19 +29,19 @@ python server.py
 - ブラウザで http://localhost:8200 が開く。PC のデータは PC のブラウザに保存される
 - 「設定 → スマホとデータを受け渡す」で QR コードが出る
   - PC → スマホ：QR からファイルをダウンロードし、スマホのアプリで「ファイルを合わせて取り込む」
-  - スマホ → PC：スマホで書き出した ZIP を、QR で開いたページから送り、PC で「合わせて取り込む」
+  - スマホ → PC：スマホで書き出したバックアップ（.json）を、QR で開いたページから送り、PC で「合わせて取り込む」
 - 合わせるときは、アイテム・場所ごとに新しく編集された方を残す。削除も反映される
 - 同じ Wi-Fi が必要。初回は Windows のファイアウォールで Python を「プライベート ネットワーク」で許可する
 - 受け渡し中のファイルは `transfer/` に置かれる（git には入れない）
 
 ファイルを更新したら、次の番号をそろえて上げる（古いファイルと新しいファイルが混ざって動かなくなるのを防ぐため）。
-- `sw.js` の `CACHE`（`mono-kanri-v7` など）
-- `index.html` と `app.js` にある `?v=7`
+- `sw.js` の `CACHE`（`mono-kanri-v8` など）
+- `index.html` と `app.js` にある `?v=8`
 
 ## ファイル
 - `index.html` / `styles.css` / `app.js` … 画面
 - `db.js` … IndexedDB への保存
-- `zip.js` … バックアップ（写真ごと ZIP）の書き出し・読み込み
+- `zip.js` … バージョン 1.6 までの ZIP バックアップの読み込み（今のバックアップは写真も文字にした JSON 1ファイル）
 - `csv.js` … CSV の読み込み（UTF-8 と Excel の Shift_JIS）
 - `sw.js` / `manifest.webmanifest` … オフライン対応・インストール
 - `vendor/` … QR生成（qrcode-generator 1.4.4）、QR読み取り（jsQR 1.4.0）

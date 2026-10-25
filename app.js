@@ -1,6 +1,6 @@
-import * as db from './db.js?v=7';
-import { makeZip, readZip } from './zip.js?v=7';
-import { decodeCsv, parseCsv, toCsv } from './csv.js?v=7';
+import * as db from './db.js?v=8';
+import { readZip } from './zip.js?v=8';
+import { decodeCsv, parseCsv, toCsv } from './csv.js?v=8';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -773,20 +773,31 @@ function scanView() {
 // ---------- 設定・バックアップ ----------
 const DAY = 24 * 60 * 60 * 1000;
 
-// 写真ごと1つの ZIP にまとめる。写真は Blob のままつなぐので、枚数が多くてもメモリを食わない
-async function buildBackupZip() {
+const blobToDataUrl = b => new Promise((res, rej) => {
+  const r = new FileReader();
+  r.onload = () => res(r.result);
+  r.onerror = () => rej(r.error);
+  r.readAsDataURL(b);
+});
+
+// 写真も文字（data URL）にして、1つの JSON ファイルにまとめる。
+// 全体を1本の文字列にはせず、写真1枚ずつの部品をつないで Blob にするので、メモリを食いにくい
+async function buildBackup() {
   const [photos, thumbs, deleted] = await Promise.all([db.getAll('photos'), db.getAll('thumbs'), db.getMeta('deleted')]);
-  const data = { app: 'mono-kanri', version: 3, exportedAt: new Date().toISOString(), locations: L, items: I, deleted: deleted ?? {} };
-  return makeZip([
-    { name: 'data.json', blob: new Blob([JSON.stringify(data)], { type: 'application/json' }) },
-    ...photos.map(p => ({ name: `photos/${p.id}.jpg`, blob: p.blob })),
-    ...thumbs.map(t => ({ name: `thumbs/${t.id}.jpg`, blob: t.blob })),
-  ]);
+  const head = JSON.stringify({ app: 'mono-kanri', version: 4, exportedAt: new Date().toISOString(), locations: L, items: I, deleted: deleted ?? {} });
+  const parts = [head.slice(0, -1)];
+  for (const [key, list] of [['photos', photos], ['thumbs', thumbs]]) {
+    parts.push(`,"${key}":[`);
+    for (const [i, p] of list.entries()) parts.push((i ? ',' : '') + JSON.stringify({ id: p.id, data: await blobToDataUrl(p.blob) }));
+    parts.push(']');
+  }
+  parts.push('}');
+  return new Blob(parts, { type: 'application/json' });
 }
 async function exportBackup() {
-  const zip = await buildBackupZip();
-  const name = `mono-kanri-${new Date().toLocaleDateString('sv-SE')}.zip`;
-  const file = new File([zip], name, { type: 'application/zip' });
+  const json = await buildBackup();
+  const name = `mono-kanri-${new Date().toLocaleDateString('sv-SE')}.json`;
+  const file = new File([json], name, { type: 'application/json' });
   if (navigator.canShare?.({ files: [file] })) {
     try {
       await navigator.share({ files: [file], title: name });
@@ -795,13 +806,13 @@ async function exportBackup() {
       if (e.name === 'AbortError') return false;
     }
   }
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(zip), download: name });
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(json), download: name });
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
   return true;
 }
 
-// ZIP（今の形式）と JSON（最初の版の形式）の両方を読める
+// JSON（今の形式・最初の版の形式）と ZIP（バージョン 1.2〜1.6 の形式）の両方を読める
 async function readBackup(file) {
   const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
   const photos = [], thumbs = [];
@@ -815,7 +826,9 @@ async function readBackup(file) {
     }
   } else {
     data = JSON.parse(await file.text());
-    for (const p of data.photos ?? []) photos.push({ id: p.id, blob: await (await fetch(p.data)).blob() });
+    const toBlob = async p => ({ id: p.id, blob: await (await fetch(p.data)).blob() });
+    for (const p of data.photos ?? []) photos.push(await toBlob(p));
+    for (const t of data.thumbs ?? []) thumbs.push(await toBlob(t));
   }
   if (data.app !== 'mono-kanri' || !Array.isArray(data.items) || !Array.isArray(data.locations)) throw new Error('not a backup');
   return { locations: data.locations, items: data.items, deleted: data.deleted ?? {}, photos, thumbs };
@@ -838,9 +851,9 @@ async function settingsView() {
       <button class="row-btn" id="merge"><span class="lead" style="background:#22c55e">${ic('layers')}</span><span>ファイルを合わせて取り込む</span>${ic('chevR', 'row-chev')}</button>
       <div class="kv-row"><span>前回のバックアップ</span><span>${last ? fmtDate(last) : 'まだありません'}</span></div>
     </div>
-    <p class="footnote">写真ごと1つの ZIP ファイルにまとめます。iPhone は「"ファイル"に保存」、Android は Google ドライブなどに保存しておくと、機種変更のときもそのまま復元できます。<br>「復元」は今のデータを全部置き換えます。PC から送ったファイルなど、両方で編集したデータは「合わせて取り込む」を使うと、新しく直した方を残して合わせます。</p>
+    <p class="footnote">写真も含めて1つの JSON ファイルにまとめます。iPhone は「"ファイル"に保存」、Android は Google ドライブなどに保存しておくと、機種変更のときもそのまま復元できます。<br>「復元」は今のデータを全部置き換えます。PC から送ったファイルなど、両方で編集したデータは「合わせて取り込む」を使うと、新しく直した方を残して合わせます。</p>
     <input type="file" id="file" accept=".zip,application/zip,.json,application/json" hidden>
-    <input type="file" id="mergeFile" accept=".zip,application/zip" hidden>
+    <input type="file" id="mergeFile" accept=".json,application/json,.zip,application/zip" hidden>
     ${pcServer ? `<div class="group-title">スマホと受け渡し</div>
     <div class="group"><a class="row-btn" href="#/transfer"><span class="lead" style="background:#22c55e">${ic('phone')}</span><span>スマホとデータを受け渡す</span>${ic('chevR', 'row-chev')}</a></div>
     <p class="footnote">PC サーバー（server.py）で開いているときだけ表示されます。</p>` : ''}
@@ -867,7 +880,7 @@ async function settingsView() {
     <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
 
     <div class="group-title">このアプリについて</div>
-    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.6</span></div></div>`;
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.7</span></div></div>`;
 
   const $export = $view.querySelector('#export');
   $export.onclick = async () => {
@@ -1541,7 +1554,7 @@ function transferView() {
     $mk.disabled = true;
     $mk.lastChild.textContent = 'ファイルを用意しています…';
     try {
-      const res = await fetch('api/outbox', { method: 'POST', body: await buildBackupZip() });
+      const res = await fetch('api/outbox', { method: 'POST', body: await buildBackup() });
       if (!res.ok) throw new Error(res.status);
       const { downloadUrl } = await res.json();
       $view.querySelector('#out').innerHTML = `

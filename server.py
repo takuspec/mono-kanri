@@ -26,14 +26,32 @@ PORT = int(os.environ.get("MONO_KANRI_PORT", "8200"))
 ROOT = os.path.dirname(os.path.abspath(__file__))
 BOX = os.path.join(ROOT, "transfer")  # 受け渡し中のファイル置き場（git には入れない）
 INBOX = os.path.join(BOX, "inbox")
-OUTBOX = os.path.join(BOX, "outbox.zip")
+OUTBOX = os.path.join(BOX, "outbox")  # 中身に合わせて .json か .zip が付く
 TOKEN = secrets.token_urlsafe(9)
 MAX_UPLOAD = 4 * 1024 ** 3
 
 # アプリとして配るファイルだけを出す（server.py や transfer/ は出さない）
 APP_FILE = re.compile(r"^/(|index\.html|[\w-]+\.(?:js|css|webmanifest)|icons/[\w.-]+\.png|vendor/[\w.-]+\.js)$")
-INBOX_FILE = re.compile(r"^/api/inbox/(phone-[\w-]+\.zip)$")
-TOKEN_PATH = re.compile(r"^/t/([\w-]+)/(upload|mono-kanri\.zip)$")
+INBOX_FILE = re.compile(r"^/api/inbox/(phone-[\w-]+\.(?:json|zip))$")
+TOKEN_PATH = re.compile(r"^/t/([\w-]+)/(upload|download)$")
+BOM = bytes([0xEF, 0xBB, 0xBF])  # UTF-8 の BOM
+TYPES = {".json": "application/json", ".zip": "application/zip"}
+
+
+def kind_of(head):
+    """ファイルの先頭から種類を決める（バックアップは JSON、バージョン 1.6 までは ZIP）"""
+    if head.startswith(b"PK"):
+        return ".zip"
+    if head.removeprefix(BOM).lstrip().startswith(b"{"):
+        return ".json"
+    return None
+
+
+def outbox_file():
+    for ext in TYPES:
+        if os.path.isfile(OUTBOX + ext):
+            return OUTBOX + ext
+    return None
 
 
 def lan_ip():
@@ -73,9 +91,9 @@ UPLOAD_PAGE = """<!doctype html>
 </style></head>
 <body><main>
   <h1>PC に送る</h1>
-  <p>モノ管理の「設定 → バックアップを書き出す」で保存した ZIP ファイルを選んでください。</p>
+  <p>モノ管理の「設定 → バックアップを書き出す」で保存したファイル（.json）を選んでください。</p>
   <div class="card">
-    <label class="btn">ファイルを選んで送る<input type="file" id="f" accept=".zip,application/zip"></label>
+    <label class="btn">ファイルを選んで送る<input type="file" id="f" accept=".json,application/json,.zip,application/zip"></label>
     <progress id="bar" max="1" value="0" hidden></progress>
     <p id="msg"></p>
   </div>
@@ -137,32 +155,33 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 
-    def receive(self, dest):
-        """送られてきた ZIP を一時ファイル経由で保存する。失敗したらメッセージを返す"""
+    def receive(self, base):
+        """送られてきたバックアップを一時ファイル経由で保存する。(エラー文, 保存先) を返す"""
         size = int(self.headers.get("Content-Length") or 0)
         if not 0 < size <= MAX_UPLOAD:
-            return "ファイルの大きさが正しくありません"
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        tmp = dest + ".part"
+            return "ファイルの大きさが正しくありません", None
+        os.makedirs(os.path.dirname(base), exist_ok=True)
+        tmp = base + ".part"
+        ext = None
         with open(tmp, "wb") as out:
             left = size
-            first = True
             while left:
                 chunk = self.rfile.read(min(left, 1024 * 1024))
                 if not chunk:
                     break
-                if first and not chunk.startswith(b"PK"):
-                    out.close()
-                    os.remove(tmp)
-                    return "モノ管理の ZIP ファイルではありません"
-                first = False
+                if ext is None:
+                    ext = kind_of(chunk)
+                    if not ext:
+                        out.close()
+                        os.remove(tmp)
+                        return "モノ管理のバックアップファイルではありません", None
                 out.write(chunk)
                 left -= len(chunk)
         if left:
             os.remove(tmp)
-            return "途中で切れました"
-        os.replace(tmp, dest)
-        return None
+            return "途中で切れました", None
+        os.replace(tmp, base + ext)
+        return None, base + ext
 
     def log_message(self, fmt, *args):
         pass  # アクセスのたびに出すとうるさいので、受け渡しのときだけ print する
@@ -195,7 +214,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not os.path.isfile(p):
                 return self.send_error(404)
             with open(p, "rb") as f:
-                return self.send_body(f.read(), "application/zip")
+                return self.send_body(f.read(), TYPES[os.path.splitext(p)[1]])
 
         m = TOKEN_PATH.match(path)
         if m:
@@ -203,13 +222,15 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_error(404)
             if m.group(2) == "upload":
                 return self.send_body(UPLOAD_PAGE.encode(), "text/html; charset=utf-8")
-            if not os.path.isfile(OUTBOX):
+            box = outbox_file()
+            if not box:
                 return self.send_body("PC でまだファイルを用意していません".encode(), "text/plain; charset=utf-8", 404)
-            with open(OUTBOX, "rb") as f:
+            ext = os.path.splitext(box)[1]
+            with open(box, "rb") as f:
                 body = f.read()
             print(f"  [PC→スマホ] スマホがダウンロードしました（{self.client_address[0]}）")
-            name = f"mono-kanri-pc-{date.today().isoformat()}.zip"
-            return self.send_body(body, "application/zip", extra={"Content-Disposition": f'attachment; filename="{name}"'})
+            name = f"mono-kanri-pc-{date.today().isoformat()}{ext}"
+            return self.send_body(body, TYPES[ext], extra={"Content-Disposition": f'attachment; filename="{name}"'})
 
         if APP_FILE.match(path):
             return super().do_GET()
@@ -222,16 +243,21 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/outbox":
             if not self.is_local():
                 return self.send_error(403)
-            err = self.receive(OUTBOX)
+            old = outbox_file()
+            err, saved = self.receive(OUTBOX + ".new")
+            if not err:
+                if old:
+                    os.remove(old)
+                os.replace(saved, OUTBOX + os.path.splitext(saved)[1])
             if err:
                 return self.send_json({"error": err}, 400)
             print("  [PC→スマホ] 送るファイルを用意しました")
-            return self.send_json({"downloadUrl": f"{base_url()}/t/{TOKEN}/mono-kanri.zip"})
+            return self.send_json({"downloadUrl": f"{base_url()}/t/{TOKEN}/download"})
 
         m = TOKEN_PATH.match(path)
         if m and m.group(2) == "upload" and secrets.compare_digest(m.group(1), TOKEN):
-            name = time.strftime("phone-%Y%m%d-%H%M%S") + f"-{secrets.token_hex(2)}.zip"
-            err = self.receive(os.path.join(INBOX, name))
+            name = time.strftime("phone-%Y%m%d-%H%M%S") + f"-{secrets.token_hex(2)}"
+            err, _ = self.receive(os.path.join(INBOX, name))
             if err:
                 return self.send_body(err.encode(), "text/plain; charset=utf-8", 400)
             print(f"  [スマホ→PC] ファイルが届きました（{self.client_address[0]}）")
