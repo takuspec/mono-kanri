@@ -1,6 +1,6 @@
-import * as db from './db.js?v=12';
-import { readZip } from './zip.js?v=12';
-import { decodeCsv, parseCsv, toCsv } from './csv.js?v=12';
+import * as db from './db.js?v=13';
+import { readZip } from './zip.js?v=13';
+import { decodeCsv, parseCsv, toCsv } from './csv.js?v=13';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -147,14 +147,15 @@ function locOptions(selected, exclude = new Set()) {
 }
 
 // ---------- 写真 ----------
-// 一覧などの小さな表示はサムネイル（thumbs）、詳細の大きな表示だけ原寸（photos）を読む
+// 一覧などの小さな表示はサムネイル（thumbs）、詳細の大きな表示だけ原寸（photos）を読む。
+// 元から小さい写真はサムネイルを作らず（thumbs には blob: null の印だけ置く）、写真そのものを一覧に使う
 const photoUrls = new Map(); // `${store}:${id}` → object URL
 async function photoUrl(id, store = 'thumbs') {
   const key = `${store}:${id}`;
   if (!photoUrls.has(key)) {
     const rec = await db.get(store, id);
-    // サムネイルがまだ作られていない写真は原寸で代用する（できたら次から使えるよう覚えない）
-    if (!rec && store === 'thumbs') return photoUrl(id, 'photos');
+    // サムネイルがない・いらない写真は原寸で代用する（まだ作っていないだけのときは、できたら使えるよう覚えない）
+    if (store === 'thumbs' && !rec?.blob) return photoUrl(id, 'photos');
     photoUrls.set(key, rec ? URL.createObjectURL(rec.blob) : '');
   }
   return photoUrls.get(key);
@@ -174,8 +175,45 @@ function hydratePhotos(root = $view) {
   // 一覧を描き直したあと（絞り込み・表示切り替えなど）も、選択中の印を付け直す
   if (sel.on) drawSel();
 }
+
+const PHOTO = [1024, 0.78]; // 長辺・画質
 const THUMB = [360, 0.75];
-// サムネイルがない写真（前の版で保存したもの・古いバックアップ）に後から作る
+const THUMB_MIN = 600; // 長辺がこれ以下の写真はサムネイルを作らない
+
+// WebP で保存できる端末か（Android・PC の Chrome など。できないブラウザは PNG を返すので、そのときは JPEG にする）
+let imageType = null;
+async function photoType() {
+  if (!imageType) {
+    const c = Object.assign(document.createElement('canvas'), { width: 2, height: 2 });
+    const b = await new Promise(r => c.toBlob(r, 'image/webp', 0.8));
+    imageType = b?.type === 'image/webp' ? 'image/webp' : 'image/jpeg';
+  }
+  return imageType;
+}
+
+// 画像を長辺 max px に縮めて保存用の形式にする。{ blob, width, height } を返す
+async function shrinkImage(file, max, quality) {
+  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => createImageBitmap(file));
+  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * k);
+  c.height = Math.round(bmp.height * k);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff'; // 透明な部分（PNG のスクリーンショットなど）は白にする
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close?.();
+  const blob = await new Promise(async r => c.toBlob(r, await photoType(), quality));
+  return { blob, width: c.width, height: c.height };
+}
+// 保存する写真と、必要ならサムネイルを作る（サムネイルがいらないときは thumb: null）
+async function makePhoto(file) {
+  const photo = await shrinkImage(file, ...PHOTO);
+  const thumb = Math.max(photo.width, photo.height) > THUMB_MIN ? (await shrinkImage(photo.blob, ...THUMB)).blob : null;
+  return { blob: photo.blob, thumb };
+}
+
+// サムネイルがない写真（前の版で保存したもの・古いバックアップ）に後から作る。小さい写真には「いらない」印を付ける
 async function ensureThumbs() {
   const [all, have] = await Promise.all([db.getAllKeys('photos'), db.getAllKeys('thumbs')]);
   const done = new Set(have);
@@ -183,22 +221,43 @@ async function ensureThumbs() {
     if (done.has(id)) continue;
     const p = await db.get('photos', id);
     try {
-      await db.put('thumbs', { id, blob: await shrink(p.blob, ...THUMB) });
+      const bmp = await createImageBitmap(p.blob);
+      const small = Math.max(bmp.width, bmp.height) <= THUMB_MIN;
+      bmp.close?.();
+      await db.put('thumbs', { id, blob: small ? null : (await shrinkImage(p.blob, ...THUMB)).blob });
     } catch {
       return; // 容量不足などのときは、次に起動したときにまた試す
     }
   }
 }
-// 端末の写真は大きいので長辺 1280px の JPEG に縮小して保存する
-async function shrink(file, max = 1280, quality = 0.82) {
-  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => createImageBitmap(file));
-  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
-  const c = document.createElement('canvas');
-  c.width = Math.round(bmp.width * k);
-  c.height = Math.round(bmp.height * k);
-  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-  bmp.close?.();
-  return new Promise(r => c.toBlob(r, 'image/jpeg', quality));
+
+// 今ある写真を、今の設定（長辺 1024・画質 0.78・WebP）で圧縮し直す。小さくならない写真はそのまま
+async function recompressPhotos(onProgress) {
+  const ids = await db.getAllKeys('photos');
+  let before = 0, after = 0;
+  for (const [i, id] of ids.entries()) {
+    onProgress(i + 1, ids.length);
+    const [p, t] = await Promise.all([db.get('photos', id), db.get('thumbs', id)]);
+    if (!p?.blob) continue;
+    const old = p.blob.size + (t?.blob?.size ?? 0);
+    try {
+      const made = await makePhoto(p.blob);
+      const photoBlob = made.blob.size < p.blob.size ? made.blob : p.blob;
+      // サムネイルは「小さい写真には作らない」決まりに合わせて作り直す（大きくなるなら元のまま）
+      const thumbBlob = made.thumb && t?.blob && t.blob.size <= made.thumb.size ? t.blob : made.thumb;
+      await db.write(s => {
+        s.photos.put({ id, blob: photoBlob });
+        s.thumbs.put({ id, blob: thumbBlob });
+      });
+      forgetPhoto(id);
+      before += old;
+      after += photoBlob.size + (thumbBlob?.size ?? 0);
+    } catch {
+      before += old;
+      after += old; // 読めない写真はそのまま
+    }
+  }
+  return { count: ids.length, before, after };
 }
 
 // ---------- 共通パーツ ----------
@@ -570,8 +629,7 @@ function itemEdit(id, q) {
   $pick.onchange = async () => {
     for (const file of $pick.files) {
       try {
-        const blob = await shrink(file);
-        const thumb = await shrink(blob, ...THUMB);
+        const { blob, thumb } = await makePhoto(file);
         added.push({ key: uid(), blob, thumb, url: URL.createObjectURL(blob) });
       } catch {
         toast('この画像は読み込めませんでした', 'error');
@@ -827,7 +885,7 @@ async function buildBackup() {
   const parts = [head.slice(0, -1)];
   for (const [key, list] of [['photos', photos], ['thumbs', thumbs]]) {
     parts.push(`,"${key}":[`);
-    for (const [i, p] of list.entries()) parts.push((i ? ',' : '') + JSON.stringify({ id: p.id, data: await blobToDataUrl(p.blob) }));
+    for (const [i, p] of list.filter(x => x.blob).entries()) parts.push((i ? ',' : '') + JSON.stringify({ id: p.id, data: await blobToDataUrl(p.blob) }));
     parts.push(']');
   }
   parts.push('}');
@@ -915,11 +973,13 @@ async function settingsView() {
         <p>場所 ${L.length}・アイテム ${I.length}・写真 ${photoCount} 枚</p>
       </div>
       <div class="kv-row"><span>消えにくい保存</span>${persistRow}</div>
+      <div class="kv-row"><span>写真の保存形式</span><span>${(await photoType()) === 'image/webp' ? 'WebP' : 'JPEG'}・長辺 ${PHOTO[0]}px</span></div>
+      ${photoCount ? `<button class="row-btn" id="recompress"><span class="lead" style="background:#0ea5e9">${ic('image')}</span><span>今ある写真を圧縮し直す</span>${ic('chevR', 'row-chev')}</button>` : ''}
     </div>
     <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
 
     <div class="group-title">このアプリについて</div>
-    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.11</span></div></div>`;
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.12</span></div></div>`;
 
   const $export = $view.querySelector('#export');
   $export.onclick = async () => {
@@ -981,6 +1041,22 @@ async function settingsView() {
   };
   $view.querySelector('#csvTemplate').onclick = () =>
     downloadFile(new Blob(['﻿' + toCsv(CSV_TEMPLATE)], { type: 'text/csv' }), 'mono-kanri-ひな形.csv');
+
+  const $re = $view.querySelector('#recompress');
+  $re?.addEventListener('click', async () => {
+    if ($re.disabled) return;
+    if (!(await confirmSheet('写真を圧縮し直す', `今ある写真 ${photoCount} 枚を、長辺 ${PHOTO[0]}px・${(await photoType()) === 'image/webp' ? 'WebP' : 'JPEG'} で保存し直して容量を減らします。
+画質は少し下がり、元には戻せません。小さくならない写真はそのままにします。
+念のため、先にバックアップを書き出しておくと安心です。`, '圧縮する'))) return;
+    const label = $re.querySelector('span:not(.lead)');
+    $re.disabled = true;
+    try {
+      const r = await recompressPhotos((i, n) => { label.textContent = `圧縮しています… ${i} / ${n}`; });
+      toast(`${fmtBytes(r.before)} → ${fmtBytes(r.after)} になりました`);
+    } finally {
+      render();
+    }
+  });
 
   $view.querySelector('#persist')?.addEventListener('click', async () => {
     const ok = await navigator.storage.persist();
