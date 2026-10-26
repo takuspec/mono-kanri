@@ -1,6 +1,6 @@
-import * as db from './db.js?v=8';
-import { readZip } from './zip.js?v=8';
-import { decodeCsv, parseCsv, toCsv } from './csv.js?v=8';
+import * as db from './db.js?v=9';
+import { readZip } from './zip.js?v=9';
+import { decodeCsv, parseCsv, toCsv } from './csv.js?v=9';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -293,8 +293,19 @@ async function home() {
     ${secHead('場所', roots.length, `<a class="link" href="#/loc/new/edit">${ic('plus')}追加</a>`)}
     <div class="place-grid">${roots.map(placeCard).join('') || `<a class="add-tile" href="#/loc/new/edit">${ic('plus')}場所を追加</a>`}</div>
     ${recent.length ? secHead('最近追加したもの') + `<div class="hscroll">${recent.map(i => itemCard(i, true)).join('')}</div>` : ''}
-    ${unplaced.length ? secHead('場所未設定', unplaced.length) + itemsBlock(unplaced, 'list') : ''}`;
+    ${unplaced.length ? secHead('場所未設定', unplaced.length, `<button type="button" class="link" id="placeAll">${ic('pin')}まとめて場所へ</button>`)
+      + `<a class="add-tile" href="#/bulk?unplaced=1" style="margin-bottom:12px">${ic('table')}選んで場所へ移動する</a>`
+      + itemsBlock(unplaced, 'list') : ''}`;
   bindBanners();
+  $view.querySelector('#placeAll')?.addEventListener('click', async () => {
+    const r = await pickLocation(`場所未設定の ${unplaced.length} 件を移動`);
+    if (!r || !r.locationId) return;
+    const now = Date.now();
+    await db.write(s => unplaced.forEach(it => s.items.put({ ...it, locationId: r.locationId, updatedAt: now })));
+    await load();
+    toast(`${unplaced.length} 件を「${pathText(r.locationId)}」に移動しました`);
+    render();
+  });
 }
 function bindBanners() {
   $view.querySelector('[data-snooze]')?.addEventListener('click', async () => {
@@ -880,7 +891,7 @@ async function settingsView() {
     <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
 
     <div class="group-title">このアプリについて</div>
-    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.7</span></div></div>`;
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.8</span></div></div>`;
 
   const $export = $view.querySelector('#export');
   $export.onclick = async () => {
@@ -1192,24 +1203,51 @@ function downloadFile(blob, name) {
 // ---------- 一覧で編集（表の形でまとめて直す・選んだものに一括でタグ付けなど） ----------
 
 // 下から出てくるシート。OK なら dialog 要素、キャンセルなら null を返す
+function sheetDialog() {
+  let d = document.getElementById('dlg');
+  if (!d) {
+    d = Object.assign(document.createElement('dialog'), { id: 'dlg', className: 'sheet-dlg' });
+    document.body.append(d);
+  }
+  return d;
+}
 function sheet(title, body, okLabel) {
-  const d = document.getElementById('dlg');
+  const d = sheetDialog();
   d.innerHTML = `<form method="dialog" class="sheet-body">
     <h3>${title}</h3>${body}
     <div class="save-row"><button type="button" class="btn" data-cancel>キャンセル</button><button value="ok" class="btn primary">${okLabel}</button></div>
   </form>`;
-  d.querySelector('[data-cancel]').onclick = () => d.close('cancel');
-  d.returnValue = '';
   d.showModal();
-  return new Promise(res => d.addEventListener('close', () => res(d.returnValue === 'ok' ? d : null), { once: true }));
+  // 閉じたときのイベントは画面が止まっていると届かないことがあるので、ボタンを押した時点で返す
+  return new Promise(res => {
+    const done = ok => { if (d.open) d.close(); res(ok ? d : null); };
+    d.querySelector('form').onsubmit = e => { e.preventDefault(); done(true); };
+    d.querySelector('[data-cancel]').onclick = () => done(false);
+    d.oncancel = () => done(false); // Esc キーなど
+  });
 }
+// 移動先を選ぶ。まだない場所は名前を入れればその場で作る（「押し入れ > 箱A」のように書ける）
 const pickLocation = async (title, current = null) => {
-  const d = await sheet(title, `<div class="group"><label class="frow"><span>場所</span><select name="loc"><option value="">場所未設定</option>${locOptions(current)}</select></label></div>`, '移動する');
-  return d ? { locationId: d.querySelector('[name=loc]').value || null } : null;
+  const d = await sheet(title, `
+    <div class="group">
+      <label class="frow"><span>場所</span><select name="loc"><option value="">場所未設定</option>${locOptions(current)}</select></label>
+      <label class="frow"><span>新規</span><input name="newLoc" placeholder="新しい場所（例：押し入れ > 箱A）" autocomplete="off"></label>
+    </div>
+    <p class="footnote">新しい場所の名前を入れると、その場所を作って移動します。</p>`, '移動する');
+  if (!d) return null;
+  const path = d.querySelector('[name=newLoc]').value.split(/\s*[>＞/／›]\s*/).filter(Boolean);
+  if (!path.length) return { locationId: d.querySelector('[name=loc]').value || null };
+  const { items, newLocs } = planImport([{ name: '_', quantity: 1, path, tags: [], note: '' }]);
+  if (newLocs.length) {
+    await db.write(s => newLocs.forEach(l => s.locations.put(l)));
+    await load();
+  }
+  return { locationId: items[0].locationId };
 };
 
 function bulkView(_, q) {
   const locId = q.get('loc');
+  const unplacedOnly = q.has('unplaced');
   const inScope = locId ? new Set(descendantIds(locId)) : null;
   const tags = q.getAll('tag');
   let text = q.get('q') ?? '';
@@ -1217,7 +1255,8 @@ function bulkView(_, q) {
   setHeader('一覧で編集', { back: locId ? `#/loc/${locId}` : '#/', always: true });
   const scope = locId
     ? `${esc(pathText(locId))}（中の場所も含む）`
-    : text || tags.length ? '検索結果' : 'すべてのアイテム';
+    : unplacedOnly ? '場所未設定のアイテム'
+      : text || tags.length ? '検索結果' : 'すべてのアイテム';
 
   $view.innerHTML = `
     <p class="meta" style="margin:4px 2px 10px">${ic('layers')}${scope}${tags.length ? '　' + tags.map(t => '#' + esc(t)).join(' ') : ''}</p>
@@ -1240,7 +1279,7 @@ function bulkView(_, q) {
         <button type="button" data-act="del" class="danger">${ic('trash')}<span>削除</span></button>
       </div>
     </div>
-    <dialog id="dlg" class="sheet-dlg"></dialog>`;
+`;
 
   const $rows = $view.querySelector('#rows');
   const $all = $view.querySelector('#all');
@@ -1259,6 +1298,7 @@ function bulkView(_, q) {
     const words = text.toLowerCase().split(/\s+/).filter(Boolean);
     visible = I.filter(it => {
       if (inScope && !inScope.has(it.locationId)) return false;
+      if (unplacedOnly && it.locationId) return false;
       if (tags.some(t => !(it.tags ?? []).includes(t))) return false;
       const hay = [it.name, it.note, ...(it.tags ?? []), pathText(it.locationId)].join(' ').toLowerCase();
       return words.every(w => hay.includes(w));
@@ -1328,9 +1368,10 @@ function bulkView(_, q) {
   $rows.addEventListener('click', async e => {
     const b = e.target.closest('[data-pick]');
     if (!b) return;
-    const it = item(b.closest('tr').dataset.id);
-    const r = await pickLocation(`「${esc(it.name)}」の場所`, it.locationId);
+    const id = b.closest('tr').dataset.id;
+    const r = await pickLocation(`「${esc(item(id).name)}」の場所`, item(id).locationId);
     if (!r) return;
+    const it = item(id); // 新しい場所を作ると読み直すので取り直す
     Object.assign(it, r, { updatedAt: Date.now() });
     await db.put('items', it);
     b.textContent = pathText(it.locationId);
@@ -1368,9 +1409,10 @@ function bulkView(_, q) {
       await saveAll(list, `${list.length} 件から ${rm.map(t => '#' + t).join(' ')} を外しました`);
     },
     async move() {
-      const list = targets();
-      const r = await pickLocation(`${list.length} 件の場所を移動`);
+      const r = await pickLocation(`${selected.size} 件の場所を移動`);
       if (!r) return;
+      // 新しい場所を作ると読み直すので、選んだアイテムはそのあとで取り直す
+      const list = targets();
       list.forEach(it => { it.locationId = r.locationId; });
       await saveAll(list, `${list.length} 件を「${pathText(r.locationId)}」に移動しました`);
     },
@@ -1394,14 +1436,14 @@ function bulkView(_, q) {
     if (act && selected.size) actions[act]();
   };
   // タグ追加シートの候補チップ → 入力欄に足す
-  $view.querySelector('#dlg').addEventListener('click', e => {
+  sheetDialog().onclick = e => {
     const t = e.target.closest('[data-t]')?.dataset.t;
     if (!t) return;
     const input = e.currentTarget.querySelector('[name=tags]');
     const cur = parseTags(input.value);
     input.value = (cur.includes(t) ? cur.filter(x => x !== t) : [...cur, t]).join(' ');
     e.target.closest('[data-t]').classList.toggle('on', !cur.includes(t));
-  });
+  };
 
   draw();
   // 開いた時点で、複数行のメモが全部見えるように高さを合わせる
