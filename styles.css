@@ -785,6 +785,34 @@ body.editing main:has(.put-bar) { padding-bottom: calc(130px + env(safe-area-ins
 .group-label:first-of-type { margin-top: 4px; }
 .group-label span { font-size: 12px; font-weight: 600; color: var(--text-3); background: var(--surface-2); border-radius: 999px; padding: 0 7px; }
 
+/* タグ：チップ式の入力 */
+.tag-editor { width: 100%; }
+.tag-box {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 44px; padding: 6px 0; cursor: text;
+}
+.tag-chip {
+  display: inline-flex; align-items: center; gap: 2px; height: 30px; padding: 0 4px 0 11px; border-radius: 999px;
+  background: var(--accent); color: var(--on-accent); font-size: 13px; font-weight: 600; white-space: nowrap;
+}
+.tag-chip button {
+  display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 50%;
+  background: rgba(255, 255, 255, .25); color: inherit; padding: 0;
+}
+.tag-chip button .ic { width: 13px; height: 13px; stroke-width: 2.6; }
+.tag-input { flex: 1; min-width: 8em; min-height: 32px !important; border: 0 !important; background: transparent; outline: none; font-size: 16px; padding: 0 !important; }
+.tag-hint { margin: 2px 0 8px; font-size: 11px; color: var(--text-3); }
+.tag-suggest:empty { display: none; }
+.chip small, .group-label small { font-weight: 500; opacity: .65; margin-right: 2px; }
+
+/* タグの管理 */
+.tag-row { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 0 6px 0 calc(16px + var(--depth) * 18px); }
+.tag-row .tag-name { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.tag-row .branch { color: var(--text-3); margin-right: 4px; font-weight: 400; }
+.tag-row .count { font-size: 12px; font-weight: 600; color: var(--text-3); background: var(--surface-2); border-radius: 999px; padding: 1px 8px; }
+.pick-chip { cursor: pointer; }
+.pick-chip input { display: none; }
+.pick-chip:has(input:checked) { background: var(--accent); color: var(--on-accent); }
+
 /* 容量バー（設定） */
 .usage { padding: 14px 16px; }
 .usage-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }

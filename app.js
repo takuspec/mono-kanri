@@ -1,6 +1,6 @@
-import * as db from './db.js?v=16';
-import { readZip } from './zip.js?v=16';
-import { decodeCsv, parseCsv, toCsv } from './csv.js?v=16';
+import * as db from './db.js?v=17';
+import { readZip } from './zip.js?v=17';
+import { decodeCsv, parseCsv, toCsv } from './csv.js?v=17';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -108,8 +108,9 @@ const pref = {
 // ---------- データ ----------
 let L = []; // 場所
 let I = []; // アイテム
+let TP = {}; // タグの親子 { 子タグ: 親タグ }
 async function load() {
-  [L, I] = await Promise.all([db.getAll('locations'), db.getAll('items')]);
+  [L, I, TP] = await Promise.all([db.getAll('locations'), db.getAll('items'), db.getMeta('tagParents').then(v => v ?? {})]);
 }
 const loc = id => L.find(l => l.id === id);
 const item = id => I.find(i => i.id === id);
@@ -130,7 +131,188 @@ function itemCount(id) {
   const ids = new Set(descendantIds(id));
   return I.filter(i => ids.has(i.locationId)).length;
 }
-const allTags = () => [...new Set(I.flatMap(i => i.tags ?? []))].sort((a, b) => a.localeCompare(b, 'ja'));
+// ---------- タグ ----------
+// TP：タグの親子 { 子タグ: 親タグ }。アイテムに付いていない親だけのタグも、ここに出てくる
+const tagPathList = t => {
+  const out = [];
+  for (let x = t; x && out.length < 20 && !out.includes(x); x = TP[x]) out.unshift(x);
+  return out;
+};
+const tagPath = t => tagPathList(t).join(' › ');
+const tagChildren = t => Object.keys(TP).filter(c => TP[c] === t);
+function tagDescendants(t) {
+  const out = new Set([t]);
+  const walk = x => tagChildren(x).forEach(c => { if (!out.has(c)) { out.add(c); walk(c); } });
+  walk(t);
+  return out;
+}
+// 全部のタグを「親 → その子」の順に並べる
+const allTags = () => [...new Set([...I.flatMap(i => i.tags ?? []), ...Object.keys(TP), ...Object.values(TP)])]
+  .sort((a, b) => tagPath(a).localeCompare(tagPath(b), 'ja'));
+// 親タグで絞り込んだときは、子タグ（孫も）の付いたアイテムも当てはまる
+const hasTag = (it, t) => { const ds = tagDescendants(t); return (it.tags ?? []).some(x => ds.has(x)); };
+const tagLabel = t => {
+  const parents = tagPathList(t).slice(0, -1);
+  return `${parents.length ? `<small>${esc(parents.join(' › '))} ›</small>` : ''}#${esc(t)}`;
+};
+
+// タグの区切りは「、」「,」と改行。スペースはタグの名前の一部として残す（「タ グ」が2つに分かれない）
+const parseTags = s => [...new Set(String(s).split(/[,、，\n]+/)
+  .map(t => t.replace(/^[#＃]+/, '').replace(/\s+/g, ' ').trim()).filter(Boolean))];
+// CSV のタグの列：「、」か「,」があればそれで区切り、なければ前の版と同じくスペースで区切る
+const parseTagsLoose = s => (/[,、，]/.test(s) ? parseTags(s) : parseTags(String(s).replace(/\s+/g, '、')));
+
+// チップ式のタグ入力。入力して Enter（か「、」）で1つのタグになる。候補をタップしても入る
+const tagChip = t => `<span class="tag-chip" data-t="${esc(t)}">#${esc(t)}<button type="button" data-rm aria-label="外す">${ic('x')}</button></span>`;
+const tagEditor = current => `<div class="tag-editor" data-tag-editor>
+    <div class="tag-box">${current.map(tagChip).join('')}<input class="tag-input" enterkeyhint="done" placeholder="${current.length ? '' : 'タグを入力して Enter'}" autocomplete="off"></div>
+    <p class="tag-hint">Enter か「、」で1つのタグになります。スペースを含む名前もそのまま使えます。</p>
+    <div class="chips tag-suggest"></div>
+  </div>`;
+function bindTagEditors(root) {
+  root.querySelectorAll('[data-tag-editor]').forEach(ed => {
+    const box = ed.querySelector('.tag-box');
+    const input = ed.querySelector('.tag-input');
+    const sug = ed.querySelector('.tag-suggest');
+    const current = () => [...box.querySelectorAll('.tag-chip')].map(c => c.dataset.t);
+    const drawSuggest = () => {
+      const have = new Set(current());
+      const q = input.value.trim().toLowerCase();
+      sug.innerHTML = allTags().filter(t => !have.has(t) && (!q || tagPath(t).toLowerCase().includes(q)))
+        .map(t => `<button type="button" class="chip" data-add="${esc(t)}">${tagLabel(t)}</button>`).join('');
+    };
+    const add = list => {
+      for (const t of list) if (!current().includes(t)) input.insertAdjacentHTML('beforebegin', tagChip(t));
+      input.placeholder = '';
+      drawSuggest();
+    };
+    const commit = () => {
+      const v = parseTags(input.value);
+      input.value = '';
+      v.length ? add(v) : drawSuggest();
+    };
+    input.addEventListener('keydown', e => {
+      if (e.isComposing || e.keyCode === 229) return; // 日本語の変換中の Enter は変換の確定に使う
+      if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      else if (e.key === 'Backspace' && !input.value) { box.querySelector('.tag-chip:last-of-type')?.remove(); drawSuggest(); }
+    });
+    input.addEventListener('input', () => (/[,、，\n]/.test(input.value) ? commit() : drawSuggest()));
+    input.addEventListener('blur', () => { if (input.value.trim()) commit(); });
+    ed.addEventListener('click', e => {
+      const rm = e.target.closest('[data-rm]');
+      if (rm) { rm.closest('.tag-chip').remove(); return drawSuggest(); }
+      const a = e.target.closest('[data-add]');
+      if (a) return add([a.dataset.add]);
+      if (e.target === box) input.focus();
+    });
+    drawSuggest();
+  });
+}
+// 入力途中の文字も含めて、タグの一覧を読む
+function readTags(root) {
+  const ed = root.querySelector('[data-tag-editor]');
+  return [...new Set([...[...ed.querySelectorAll('.tag-chip')].map(c => c.dataset.t), ...parseTags(ed.querySelector('.tag-input').value)])];
+}
+
+// タグの名前を変える。すでにある名前にすると1つにまとまる
+async function renameTag(from, to) {
+  const list = I.filter(i => (i.tags ?? []).includes(from))
+    .map(it => ({ ...it, tags: [...new Set(it.tags.map(t => (t === from ? to : t)))] }));
+  if (TP[from] && !TP[to] && TP[from] !== to) TP[to] = TP[from];
+  delete TP[from];
+  for (const c of Object.keys(TP)) if (TP[c] === from) TP[c] = to;
+  if (TP[to] === to) delete TP[to];
+  await db.setMeta('tagParents', TP);
+  await saveItems(list);
+  return list.length;
+}
+// タグを消す。アイテムから外し、子タグはひとつ上の親につなぎ直す
+async function deleteTag(t) {
+  const list = I.filter(i => (i.tags ?? []).includes(t)).map(it => ({ ...it, tags: it.tags.filter(x => x !== t) }));
+  for (const c of Object.keys(TP)) if (TP[c] === t) { if (TP[t]) TP[c] = TP[t]; else delete TP[c]; }
+  delete TP[t];
+  await db.setMeta('tagParents', TP);
+  await saveItems(list);
+  return list.length;
+}
+async function setTagParent(t, parent) {
+  if (parent && !tagDescendants(t).has(parent)) TP[t] = parent;
+  else delete TP[t];
+  await db.setMeta('tagParents', TP);
+}
+
+// ---------- タグの管理（設定から） ----------
+function tagsView() {
+  setHeader('タグの管理', { back: '#/settings', always: true });
+  const tags = allTags();
+  const count = t => I.filter(i => (i.tags ?? []).includes(t)).length;
+  const total = t => I.filter(i => hasTag(i, t)).length; // 子タグの付いたアイテムも数える
+  $view.innerHTML = `
+    <header class="page-head"><h1 class="large">タグの管理</h1><p class="meta">${tags.length} 個</p></header>
+    ${tags.length ? `<div class="group">${tags.map(t => {
+      const depth = tagPathList(t).length - 1;
+      return `<div class="tag-row" style="--depth:${depth}">
+        <a class="tag-name" href="#/search?tag=${encodeURIComponent(t)}">${depth ? '<span class="branch">└</span>' : ''}#${esc(t)}</a>
+        <span class="count">${total(t)}</span>
+        <button type="button" class="icon-btn" data-tag-menu="${esc(t)}" aria-label="${esc(t)} を編集">${ic('edit')}</button>
+      </div>`;
+    }).join('')}</div>` : empty('tag', 'まだタグがありません', 'アイテムにタグを付けると、ここで整理できます')}
+    <p class="footnote">鉛筆のボタンで、名前の変更・親タグの設定・削除ができます。ほかのタグと同じ名前に変えると、1つにまとまります。<br>親タグで絞り込むと、子タグの付いたアイテムも出てきます。</p>
+    <div style="margin-top:14px"><button class="btn block" id="newParent">${ic('plus')}親タグを作る</button></div>`;
+
+  $view.querySelectorAll('[data-tag-menu]').forEach(b => b.onclick = async () => {
+    const t = b.dataset.tagMenu;
+    const exclude = tagDescendants(t);
+    let wantDelete = false;
+    const p = sheet(`#${esc(t)}`, `
+      <div class="group">
+        <label class="frow"><span>名前</span><input name="tname" value="${esc(t)}" autocomplete="off"></label>
+        <label class="frow"><span>親</span><select name="tparent"><option value="">なし（いちばん上）</option>${
+          allTags().filter(x => !exclude.has(x)).map(x => `<option value="${esc(x)}" ${TP[t] === x ? 'selected' : ''}>${esc(tagPath(x))}</option>`).join('')}</select></label>
+      </div>
+      <p class="footnote">使っているアイテム ${count(t)} 件${tagChildren(t).length ? `・子タグ ${tagChildren(t).length} 個` : ''}</p>
+      <div class="group" style="margin-top:14px"><button type="button" class="row-btn danger" data-del-tag>${ic('trash')}<span>このタグを削除</span></button></div>`, '保存');
+    const d = sheetDialog();
+    d.querySelector('[data-del-tag]').onclick = () => { wantDelete = true; d.querySelector('[data-cancel]').click(); };
+    const ok = await p;
+    if (wantDelete) {
+      if (!(await confirmSheet(`#${t} を削除`, `${count(t)} 件のアイテムからこのタグを外します。${tagChildren(t).length ? '\n子タグは、ひとつ上の親タグの下に移ります。' : ''}`, '削除する', true))) return;
+      const n = await deleteTag(t);
+      toast(`#${t} を削除しました（${n} 件から外しました）`);
+      return render();
+    }
+    if (!ok) return;
+    const name = parseTags(ok.querySelector('[name=tname]').value)[0];
+    const parent = ok.querySelector('[name=tparent]').value || null;
+    if (name && name !== t) {
+      const merging = allTags().includes(name);
+      if (merging && !(await confirmSheet('タグをまとめる', `#${t} を、すでにある #${name} にまとめます。`, 'まとめる'))) return;
+      await renameTag(t, name);
+      await setTagParent(name, parent ?? TP[name] ?? null);
+      toast(merging ? `#${name} にまとめました` : `#${name} に変えました`);
+    } else {
+      await setTagParent(t, parent);
+      toast('保存しました');
+    }
+    render();
+  });
+
+  $view.querySelector('#newParent').onclick = async () => {
+    const roots = allTags().filter(x => !TP[x]);
+    const ok = await sheet('親タグを作る', `
+      <div class="group"><label class="frow"><span>名前</span><input name="pname" placeholder="例：CLAMP作品" autocomplete="off"></label></div>
+      ${roots.length ? `<p class="footnote" style="margin-top:12px">この親タグの下に入れるタグを選んでください</p>
+      <div class="chips sheet-chips">${roots.map(x => `<label class="chip pick-chip"><input type="checkbox" name="kid" value="${esc(x)}">#${esc(x)}</label>`).join('')}</div>` : ''}`, '作る');
+    const name = ok && parseTags(ok.querySelector('[name=pname]').value)[0];
+    if (!name) return;
+    const kids = [...ok.querySelectorAll('[name=kid]:checked')].map(c => c.value).filter(k => k !== name);
+    for (const k of kids) if (!tagDescendants(k).has(name)) TP[k] = name;
+    await db.setMeta('tagParents', TP);
+    toast(kids.length ? `#${name} の下に ${kids.length} 個のタグを入れました` : '子にするタグを選ぶと、親タグができます');
+    render();
+  };
+}
+
 
 // 選択肢用：階層順に並べた場所一覧
 function locOptions(selected, exclude = new Set()) {
@@ -344,7 +526,6 @@ function setHeader(title, { back = null, actions = '', always = false } = {}) {
   $actions.innerHTML = actions;
 }
 const iconBtn = (href, icon, label) => `<a class="icon-btn" href="${href}" aria-label="${label}">${ic(icon)}</a>`;
-const parseTags = s => [...new Set(s.split(/[,、\s#]+/).map(t => t.trim()).filter(Boolean))];
 const fmtDate = t => new Date(t).toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
 
 // ---------- 画面 ----------
@@ -525,7 +706,7 @@ function itemView(id) {
   const where = it.locationId ? pathText(it.locationId) : '場所未設定';
   const rows = [
     it.tags?.length && `<div class="info-row">${ic('tag')}<div><div class="k">タグ</div><div class="chips">${it.tags.map(t =>
-      `<a class="chip soft" href="#/search?tag=${encodeURIComponent(t)}">#${esc(t)}</a>`).join('')}</div></div></div>`,
+      `<a class="chip soft" href="#/search?tag=${encodeURIComponent(t)}">${tagLabel(t)}</a>`).join('')}</div></div></div>`,
     it.note && `<div class="info-row">${ic('note')}<div><div class="k">メモ</div><div class="v">${esc(it.note)}</div></div></div>`,
     `<div class="info-row">${ic('clock')}<div><div class="k">登録日</div><div class="v">${fmtDate(it.createdAt)}${it.updatedAt && it.updatedAt - it.createdAt > 60000 ? `（${fmtDate(it.updatedAt)} 更新）` : ''}</div></div></div>`,
   ].filter(Boolean);
@@ -576,7 +757,7 @@ function itemView(id) {
   $view.querySelector('[data-q="tags"]').onclick = async () => {
     const d = await sheet('タグを編集', tagPicker(it.tags ?? []), '保存');
     if (!d) return;
-    await saveItems([{ ...item(id), tags: parseTags(d.querySelector('[name=tags]').value) }]);
+    await saveItems([{ ...item(id), tags: readTags(d) }]);
     toast('タグを保存しました');
     render();
   };
@@ -611,10 +792,7 @@ function itemEdit(id, q) {
       </div>
       <div class="group-title">タグ</div>
       <div class="group">
-        <div class="frow col">
-          <input name="tags" value="${esc((it.tags ?? []).join(' '))}" placeholder="スペース区切りで入力（例：電気 予備）">
-          <div class="chips" id="tagpick"></div>
-        </div>
+        <div class="frow col">${tagEditor(it.tags ?? [])}</div>
       </div>
       <div class="group-title">メモ</div>
       <div class="group"><label class="frow col"><textarea name="note" maxlength="2000" placeholder="型番、買った店、使い方など">${esc(it.note)}</textarea></label></div>
@@ -666,21 +844,7 @@ function itemEdit(id, q) {
     f.quantity.value = Math.max(0, (parseInt(f.quantity.value, 10) || 0) + Number(b.dataset.d));
   });
 
-  const $tagpick = $view.querySelector('#tagpick');
-  function drawTagPick() {
-    const cur = new Set(parseTags(f.tags.value));
-    $tagpick.innerHTML = allTags().map(t =>
-      `<button type="button" class="chip ${cur.has(t) ? 'on' : ''}" data-t="${esc(t)}">#${esc(t)}</button>`).join('');
-  }
-  $tagpick.onclick = e => {
-    const t = e.target.closest('[data-t]')?.dataset.t;
-    if (!t) return;
-    const cur = parseTags(f.tags.value);
-    f.tags.value = (cur.includes(t) ? cur.filter(x => x !== t) : [...cur, t]).join(' ');
-    drawTagPick();
-  };
-  f.tags.oninput = drawTagPick;
-  drawTagPick();
+  bindTagEditors(f);
 
   f.onsubmit = async e => {
     e.preventDefault();
@@ -692,7 +856,7 @@ function itemEdit(id, q) {
       name,
       quantity: Math.max(0, parseInt(f.quantity.value, 10) || 0),
       locationId: f.locationId.value || null,
-      tags: parseTags(f.tags.value),
+      tags: readTags(f),
       note: f.note.value.trim(),
       photos: [...added.map(a => a.key).reverse(), ...kept],
       createdAt: it.createdAt ?? Date.now(),
@@ -738,11 +902,11 @@ function searchView(_, q) {
   function draw() {
     const tagList = allTags();
     $view.querySelector('#tags').innerHTML = tagList.map(t =>
-      `<button type="button" class="chip ${tags.has(t) ? 'on' : ''}" data-t="${esc(t)}">#${esc(t)}</button>`).join('');
+      `<button type="button" class="chip ${tags.has(t) ? 'on' : ''}" data-t="${esc(t)}">${tagLabel(t)}</button>`).join('');
     const words = text.toLowerCase().split(/\s+/).filter(Boolean);
     const active = words.length || tags.size;
     const hits = active ? I.filter(it => {
-      if ([...tags].some(t => !(it.tags ?? []).includes(t))) return false;
+      if ([...tags].some(t => !hasTag(it, t))) return false;
       const hay = [it.name, it.note, ...(it.tags ?? []), pathText(it.locationId)].join(' ').toLowerCase();
       return words.every(w => hay.includes(w));
     }).sort(byName) : [];
@@ -902,7 +1066,7 @@ const blobToDataUrl = b => new Promise((res, rej) => {
 // 全体を1本の文字列にはせず、写真1枚ずつの部品をつないで Blob にするので、メモリを食いにくい
 async function buildBackup() {
   const [photos, thumbs, deleted] = await Promise.all([db.getAll('photos'), db.getAll('thumbs'), db.getMeta('deleted')]);
-  const head = JSON.stringify({ app: 'mono-kanri', version: 4, exportedAt: new Date().toISOString(), locations: L, items: I, deleted: deleted ?? {} });
+  const head = JSON.stringify({ app: 'mono-kanri', version: 4, exportedAt: new Date().toISOString(), locations: L, items: I, deleted: deleted ?? {}, tagParents: TP });
   const parts = [head.slice(0, -1)];
   for (const [key, list] of [['photos', photos], ['thumbs', thumbs]]) {
     parts.push(`,"${key}":[`);
@@ -949,7 +1113,7 @@ async function readBackup(file) {
     for (const t of data.thumbs ?? []) thumbs.push(await toBlob(t));
   }
   if (data.app !== 'mono-kanri' || !Array.isArray(data.items) || !Array.isArray(data.locations)) throw new Error('not a backup');
-  return { locations: data.locations, items: data.items, deleted: data.deleted ?? {}, photos, thumbs };
+  return { locations: data.locations, items: data.items, deleted: data.deleted ?? {}, tagParents: data.tagParents ?? {}, photos, thumbs };
 }
 
 async function settingsView() {
@@ -978,6 +1142,7 @@ async function settingsView() {
 
     <div class="group-title">まとめて登録</div>
     <div class="group">
+      <a class="row-btn" href="#/tags"><span class="lead" style="background:#ec4899">${ic('tag')}</span><span>タグの管理</span>${ic('chevR', 'row-chev')}</a>
       <a class="row-btn" href="#/text"><span class="lead" style="background:#a855f7">${ic('note')}</span><span>テキストでまとめて追加</span>${ic('chevR', 'row-chev')}</a>
       <button class="row-btn" id="csv"><span class="lead" style="background:#f59e0b">${ic('table')}</span><span>CSV ファイルから追加</span>${ic('chevR', 'row-chev')}</button>
       <a class="row-btn" href="#/bulk"><span class="lead" style="background:#0ea5e9">${ic('table')}</span><span>すべてのアイテムを一覧で編集</span>${ic('chevR', 'row-chev')}</a>
@@ -1000,7 +1165,7 @@ async function settingsView() {
     <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
 
     <div class="group-title">このアプリについて</div>
-    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.15</span></div></div>`;
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.16</span></div></div>`;
 
   const $export = $view.querySelector('#export');
   $export.onclick = async () => {
@@ -1034,6 +1199,7 @@ async function settingsView() {
     }
     if (!(await confirmSheet('バックアップから復元', `今のデータを消して、バックアップ（場所 ${data.locations.length}・アイテム ${data.items.length}・写真 ${data.photos.length} 枚）に置き換えます。`, '置き換える', true))) return;
     await db.replaceAll(data);
+    await db.setMeta('tagParents', data.tagParents ?? {});
     for (const u of photoUrls.values()) if (u) URL.revokeObjectURL(u);
     photoUrls.clear();
     await load();
@@ -1123,8 +1289,8 @@ const CSV_COLS = {
 };
 const CSV_TEMPLATE = [
   ['名前', '数量', '場所', 'タグ', 'メモ'],
-  ['延長コード', '2', 'リビング/テレビ台', '電気 予備', '3mと1m'],
-  ['KINGDOM HEARTS III ブリングアーツ リク', '1', '押し入れ/フィギュア棚', 'キングダムハーツ フィギュア', ''],
+  ['延長コード', '2', 'リビング/テレビ台', '電気、予備', '3mと1m'],
+  ['KINGDOM HEARTS III ブリングアーツ リク', '1', '押し入れ/フィギュア棚', 'キングダムハーツ、フィギュア', ''],
   ['単3電池', '8', 'キッチン/引き出し', '消耗品', ''],
 ];
 
@@ -1146,7 +1312,7 @@ function csvToRows(table) {
       name,
       quantity: Number.isFinite(qty) ? qty : 1,
       path: get('location').split(/\s*[/／>＞›]\s*/).filter(Boolean),
-      tags: parseTags(get('tags')),
+      tags: parseTagsLoose(get('tags')),
       note: get('note'),
     });
   }
@@ -1342,16 +1508,7 @@ function sheet(title, body, okLabel, danger = false) {
     <h3>${title}</h3>${body}
     <div class="save-row"><button type="button" class="btn" data-cancel>キャンセル</button><button value="ok" class="btn primary${danger ? ' danger' : ''}">${okLabel}</button></div>
   </form>`;
-  // タグの候補チップを押したら、入力欄に足す／外す
-  d.onclick = e => {
-    const chip = e.target.closest('[data-t]');
-    const input = d.querySelector('[name=tags]');
-    if (!chip || !input) return;
-    const cur = parseTags(input.value);
-    const t = chip.dataset.t;
-    input.value = (cur.includes(t) ? cur.filter(x => x !== t) : [...cur, t]).join(' ');
-    chip.classList.toggle('on', !cur.includes(t));
-  };
+  bindTagEditors(d);
   d.showModal();
   // 閉じたときのイベントは画面が止まっていると届かないことがあるので、ボタンを押した時点で返す
   return new Promise(res => {
@@ -1366,10 +1523,7 @@ async function confirmSheet(title, message, okLabel = 'OK', danger = false) {
   const body = message ? `<p class="sheet-msg">${esc(message).replace(/\n/g, '<br>')}</p>` : '';
   return !!(await sheet(title, body, okLabel, danger));
 }
-const tagPicker = current => `
-  <div class="group"><label class="frow col"><input name="tags" value="${esc(current.join(' '))}" placeholder="タグ（スペース区切り）" autocomplete="off"></label></div>
-  ${allTags().length ? `<div class="chips sheet-chips">${allTags().map(t =>
-    `<button type="button" class="chip ${current.includes(t) ? 'on' : ''}" data-t="${esc(t)}">#${esc(t)}</button>`).join('')}</div>` : ''}`;
+const tagPicker = current => `<div class="group"><div class="frow col">${tagEditor(current)}</div></div>`;
 
 // 移動先を選ぶ。まだない場所は名前を入れればその場で作る（「押し入れ > 箱A」のように書ける）
 const pickLocation = async (title, current = null, { exclude = new Set(), noneLabel = '場所未設定' } = {}) => {
@@ -1408,7 +1562,7 @@ const bulkOps = {
   },
   async tagAdd(ids) {
     const d = await sheet(`${ids.length} 件にタグを追加`, tagPicker([]), '追加する');
-    const add = d ? parseTags(d.querySelector('[name=tags]').value) : [];
+    const add = d ? readTags(d) : [];
     if (!add.length) return false;
     await saveItems(pickItems(ids).map(it => ({ ...it, tags: [...new Set([...(it.tags ?? []), ...add])] })));
     toast(`${ids.length} 件に ${add.map(t => '#' + t).join(' ')} を追加しました`);
@@ -1576,7 +1730,7 @@ function bulkView(_, q) {
     <td class="c-name"><div class="name-cell"><a class="mini" href="#/item/${it.id}" aria-label="開く">${media(it)}</a><input data-f="name" value="${esc(it.name)}" aria-label="名前"></div></td>
     <td class="c-qty"><input data-f="quantity" type="number" inputmode="numeric" min="0" value="${it.quantity ?? 1}" aria-label="数量"></td>
     <td class="c-loc"><button type="button" class="cell-btn" data-pick>${esc(pathText(it.locationId))}</button></td>
-    <td class="c-tags"><input data-f="tags" value="${esc((it.tags ?? []).join(' '))}" placeholder="—" aria-label="タグ"></td>
+    <td class="c-tags"><input data-f="tags" value="${esc((it.tags ?? []).join('、'))}" placeholder="—" aria-label="タグ（、区切り）"></td>
     <td class="c-note"><textarea data-f="note" rows="1" placeholder="—" aria-label="メモ">${esc(it.note)}</textarea></td>
   </tr>`;
 
@@ -1585,7 +1739,7 @@ function bulkView(_, q) {
     visible = I.filter(it => {
       if (inScope && !inScope.has(it.locationId)) return false;
       if (unplacedOnly && it.locationId) return false;
-      if (tags.some(t => !(it.tags ?? []).includes(t))) return false;
+      if (tags.some(t => !hasTag(it, t))) return false;
       const hay = [it.name, it.note, ...(it.tags ?? []), pathText(it.locationId)].join(' ').toLowerCase();
       return words.every(w => hay.includes(w));
     }).sort(byName);
@@ -1640,7 +1794,7 @@ function bulkView(_, q) {
     if (f === 'note') v = v.trim();
     if (JSON.stringify(v) === JSON.stringify(it[f] ?? (f === 'tags' ? [] : ''))) return;
     Object.assign(it, { [f]: v, updatedAt: Date.now() });
-    el.value = Array.isArray(v) ? v.join(' ') : v;
+    el.value = Array.isArray(v) ? v.join('、') : v;
     await db.put('items', it);
     el.classList.remove('saved');
     void el.offsetWidth;
@@ -1728,7 +1882,7 @@ async function planMerge(data) {
   const before = new Set([...L, ...I].map(r => r.id));
   const after = new Set([...locs, ...items].map(r => r.id));
   return {
-    locs, items, deleted,
+    locs, items, deleted, tagParents: { ...(data.tagParents ?? {}), ...TP }, // 同じタグはこの端末の設定を優先
     addPhotos: data.photos.filter(p => need.has(p.id) && !havePhotos.has(p.id)),
     addThumbs: (data.thumbs ?? []).filter(t => need.has(t.id) && !haveThumbs.has(t.id)),
     dropPhotos: [...havePhotos].filter(id => !need.has(id)),
@@ -1750,6 +1904,7 @@ async function applyMerge(plan) {
     plan.addThumbs.forEach(t => s.thumbs.put(t));
     plan.dropPhotos.forEach(id => { s.photos.delete(id); s.thumbs.delete(id); });
     s.meta.put({ key: 'deleted', value: plan.deleted });
+    s.meta.put({ key: 'tagParents', value: plan.tagParents });
   });
   plan.dropPhotos.forEach(forgetPhoto);
   await load();
@@ -1870,11 +2025,11 @@ function transferView() {
 
 // ---------- すべてのアイテム（ホームの「一覧を見る →」から。検索結果と同じ見せ方） ----------
 // 並べ替え。タグ順は「名前の順でいちばん先に来るタグ」でまとめ、タグのないものは最後
-const firstTag = it => [...(it.tags ?? [])].sort((a, b) => a.localeCompare(b, 'ja'))[0];
+const firstTag = it => [...(it.tags ?? [])].sort((a, b) => tagPath(a).localeCompare(tagPath(b), 'ja'))[0];
 const SORTS = {
   new: ['新しい順', (a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)],
   name: ['名前順', byName],
-  tag: ['タグ順', (a, b) => (firstTag(a) ?? '￿').localeCompare(firstTag(b) ?? '￿', 'ja') || byName(a, b)],
+  tag: ['タグ順', (a, b) => (firstTag(a) ? tagPath(firstTag(a)) : '￿').localeCompare(firstTag(b) ? tagPath(firstTag(b)) : '￿', 'ja') || byName(a, b)],
   qty: ['数量の多い順', (a, b) => (b.quantity ?? 0) - (a.quantity ?? 0) || byName(a, b)],
   place: ['場所順', (a, b) => pathText(a.locationId).localeCompare(pathText(b.locationId), 'ja') || byName(a, b)],
 };
@@ -1891,7 +2046,7 @@ function sortedBlock(list, sort, mode, showPath = false) {
     groups.get(t).push(it);
   }
   return [...groups].map(([t, its]) =>
-    `<h3 class="group-label">${t ? '#' + esc(t) : 'タグなし'}<span>${its.length}</span></h3>${itemsBlock(its, mode, showPath)}`).join('');
+    `<h3 class="group-label">${t ? tagLabel(t) : 'タグなし'}<span>${its.length}</span></h3>${itemsBlock(its, mode, showPath)}`).join('');
 }
 
 function itemsView(_, q) {
@@ -2067,6 +2222,7 @@ const routes = [
   [/^\/items$/, itemsView, 'home'],
   [/^\/scan$/, scanView, 'scan'],
   [/^\/settings$/, settingsView, 'settings'],
+  [/^\/tags$/, tagsView, 'settings'],
   [/^\/import$/, importView, 'settings', true],
   [/^\/bulk$/, bulkView, 'home', true],
   [/^\/transfer$/, transferView, 'settings'],
