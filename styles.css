@@ -642,7 +642,7 @@ body.editing .tabbar { display: none; }
   box-shadow: 0 -1px 0 var(--line);
 }
 .sel-count { display: block; text-align: center; font-size: 12px; font-weight: 600; color: var(--text-2); margin-bottom: 4px; }
-.bulk-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; max-width: 728px; margin: 0 auto; }
+.bulk-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(56px, 1fr)); gap: 2px; max-width: 728px; margin: 0 auto; }
 .bulk-actions button {
   display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0;
   border: 0; border-radius: 12px; background: transparent; color: var(--accent); font-size: 11px; font-weight: 600;
@@ -827,6 +827,25 @@ body.editing main:has(.put-bar) { padding-bottom: calc(130px + env(safe-area-ins
   background: color-mix(in srgb, var(--accent) 6%, var(--surface-2));
 }
 .sub-tags .sub-label { width: 100%; font-size: 12px; font-weight: 600; color: var(--text-3); }
+
+/* 箱マーク（写真の右上）。箱が本体と別の場所にあるときは色を変える */
+.box-badge {
+  position: absolute; z-index: 1; top: 6px; right: 6px; display: grid; place-items: center;
+  width: 26px; height: 26px; border-radius: 8px;
+  background: rgba(255, 255, 255, .92); color: #92400e; box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
+}
+.box-badge .ic { width: 16px; height: 16px; stroke-width: 2.1; }
+.box-badge.apart { background: #f59e0b; color: #fff; }
+.row-media { position: relative; }
+.row-media .box-badge { top: 1px; right: 1px; width: 18px; height: 18px; border-radius: 6px; }
+.row-media .box-badge .ic { width: 11px; height: 11px; }
+.cols-dense .box-badge { top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 6px; }
+.cols-dense .box-badge .ic { width: 12px; height: 12px; }
+.box-card { box-shadow: inset 0 0 0 2px #f59e0b, var(--shadow-sm); }
+.box-card .card-name { color: #b45309; }
+.box-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.box-actions .chip { color: var(--accent); }
+.box-link { color: var(--accent); font-weight: 600; }
 
 /* タグの管理 */
 .tag-row { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 0 6px 0 calc(16px + var(--depth) * 18px); }

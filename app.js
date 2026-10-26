@@ -1,6 +1,6 @@
-import * as db from './db.js?v=19';
-import { readZip } from './zip.js?v=19';
-import { decodeCsv, parseCsv, toCsv } from './csv.js?v=19';
+import * as db from './db.js?v=20';
+import { readZip } from './zip.js?v=20';
+import { decodeCsv, parseCsv, toCsv } from './csv.js?v=20';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -449,20 +449,40 @@ const media = it => it.photos?.length
   : `<span class="ph-tile" style="--c:${hue(it.name)}">${initial(it.name)}</span>`;
 const tagText = it => (it.tags ?? []).map(t => '#' + t).join(' ');
 
+// 箱：it.box = { same: true }（本体と同じ場所）か { locationId }（別の場所）。箱がなければ it.box はない。
+// 箱は本体と同じ1件のアイテムとして数えるので、登録数は増えない
+const SAME = '__same'; // 箱の場所の選択肢：本体と同じ場所
+const UNSET = '__unset'; // 箱はあるが、置き場所はまだ決めていない
+const boxFrom = v => (v === SAME ? { same: true } : { locationId: v && v !== UNSET ? v : null });
+const boxLoc = it => (it.box ? (it.box.same ? it.locationId ?? null : it.box.locationId ?? null) : undefined);
+const boxApart = it => !!it.box && !it.box.same && (it.box.locationId ?? null) !== (it.locationId ?? null);
+const boxText = it => (!it.box ? '' : boxApart(it) ? `箱：${pathText(boxLoc(it))}` : '箱：本体と同じ場所');
+// 写真の右上の箱マーク。箱が別の場所にあるときは色を変える
+const boxBadge = it => (it.box ? `<span class="box-badge ${boxApart(it) ? 'apart' : ''}" title="${esc(boxText(it))}">${ic('box')}</span>` : '');
+// 検索で当てる文字列（箱の場所も含める）
+const haystack = it => [it.name, it.note, ...(it.tags ?? []), pathText(it.locationId), it.box ? '箱 ' + pathText(boxLoc(it)) : ''].join(' ').toLowerCase();
+
 function itemCard(it, showPath = false) {
   const q = it.quantity ?? 1;
   const sub = showPath ? pathText(it.locationId) : tagText(it) || pathText(it.locationId);
   return `<a class="item-card" href="#/item/${it.id}" data-id="${it.id}">
-    <span class="card-media">${media(it)}<span class="qty-badge ${q === 0 ? 'zero' : ''}">×${q}</span></span>
+    <span class="card-media">${media(it)}${boxBadge(it)}<span class="qty-badge ${q === 0 ? 'zero' : ''}">×${q}</span></span>
     <span class="card-body"><span class="card-name">${esc(it.name)}</span><span class="card-sub">${esc(sub)}</span></span>
   </a>`;
 }
 function itemRow(it, showPath = false) {
   const sub = [showPath ? pathText(it.locationId) : '', tagText(it)].filter(Boolean).join('　');
   return `<a class="row" href="#/item/${it.id}" data-id="${it.id}">
-    <span class="row-media">${media(it)}</span>
+    <span class="row-media">${media(it)}${boxBadge(it)}</span>
     <span class="row-main"><span class="row-title">${esc(it.name)}</span>${sub ? `<span class="row-sub">${esc(sub)}</span>` : ''}</span>
     <span class="row-qty">×${it.quantity ?? 1}</span>${ic('chevR', 'row-chev')}
+  </a>`;
+}
+// 箱だけがこの場所にあるアイテム（本体は別の場所）。押すとアイテムが開く
+function boxCard(it) {
+  return `<a class="item-card box-card" href="#/item/${it.id}">
+    <span class="card-media">${media(it)}${boxBadge(it)}</span>
+    <span class="card-body"><span class="card-name">${esc(it.name)} の箱</span><span class="card-sub">本体：${esc(pathText(it.locationId))}</span></span>
   </a>`;
 }
 function placeCard(l) {
@@ -583,10 +603,11 @@ function locView(id) {
   });
   const kids = childLocs(id);
   const its = itemsIn(id);
+  const boxes = I.filter(it => boxApart(it) && (it.box.locationId ?? null) === id).sort(byName); // 本体は別の場所
   const mode = pref.get('itemView', 'grid');
   const PLACE_SORTS = ['new', 'name', 'tag', 'qty'];
   const sort = PLACE_SORTS.includes(pref.get('placeSort', 'new')) ? pref.get('placeSort', 'new') : 'new';
-  const meta = [`${itemCount(id)} アイテム`, kids.length ? `${kids.length} 場所` : ''].filter(Boolean).join(' · ');
+  const meta = [`${itemCount(id)} アイテム`, boxes.length ? `箱 ${boxes.length}` : '', kids.length ? `${kids.length} 場所` : ''].filter(Boolean).join(' · ');
   $view.innerHTML = `
     ${crumbs(id)}
     <header class="hero-head">
@@ -608,7 +629,8 @@ function locView(id) {
       ? `<div class="sort-row">${sortPicker(PLACE_SORTS, sort)}</div>${sortedBlock(its, sort, mode)}`
       : empty('image', 'まだアイテムがありません', '登録済みのアイテムから選んで入れたり、新しく登録したりできます',
         `<a class="btn primary" href="#/loc/${id}/add">${ic('plus')}アイテムを追加</a>`)}
-    ${its.length ? '<p class="footnote">「選択」を押すか写真を長押しすると、写真をタップして選び、まとめて移動・タグ付け・削除ができます。</p>' : ''}`;
+    ${its.length ? '<p class="footnote">「選択」を押すか写真を長押しすると、写真をタップして選び、まとめて移動・タグ付け・削除ができます。</p>' : ''}
+    ${boxes.length ? secHead('箱だけここにあるもの', boxes.length) + `<div class="item-grid">${boxes.map(boxCard).join('')}</div>` : ''}`;
   bindViewToggle();
   $view.querySelector('#sortPick')?.addEventListener('change', e => { pref.set('placeSort', e.target.value); render(); });
   $view.querySelector('[data-q="moveLoc"]').onclick = async () => {
@@ -681,7 +703,10 @@ function locEdit(id, q) {
     const now = Date.now();
     await db.write(s => {
       for (const k of kids) s.locations.put({ ...k, parentId: l.parentId ?? null, updatedAt: now });
-      for (const i of its) s.items.put({ ...i, locationId: l.parentId ?? null, updatedAt: now });
+      const up = l.parentId ?? null;
+      const boxHere = i => i.box && !i.box.same && i.box.locationId === id;
+      for (const i of its) s.items.put({ ...i, locationId: up, ...(boxHere(i) ? { box: { locationId: up } } : {}), updatedAt: now });
+      for (const i of I.filter(x => boxHere(x) && (x.locationId ?? null) !== id)) s.items.put({ ...i, box: { locationId: up }, updatedAt: now });
       s.locations.delete(id);
     });
     await addTombstones([id]);
@@ -707,6 +732,10 @@ function itemView(id) {
   const rows = [
     it.tags?.length && `<div class="info-row">${ic('tag')}<div><div class="k">タグ</div><div class="chips">${it.tags.map(t =>
       `<a class="chip soft ${tagChildren(t).length ? 'parent' : ''}" href="#/search?tag=${encodeURIComponent(t)}">${tagLabel(t)}</a>`).join('')}</div></div></div>`,
+    `<div class="info-row">${ic('box')}<div style="flex:1"><div class="k">箱</div>${it.box
+      ? `<div class="v">${boxApart(it) ? `<a class="box-link" href="${boxLoc(it) ? `#/loc/${boxLoc(it)}` : '#/'}">${esc(pathText(boxLoc(it)))}</a>` : '本体と同じ場所'}</div>
+         <div class="box-actions"><button type="button" class="chip" data-q="boxMove">${ic('pin')}箱の場所を変える</button><button type="button" class="chip" data-q="boxDel">${ic('x')}箱なしにする</button></div>`
+      : `<div class="box-actions"><button type="button" class="chip" data-q="boxAdd">${ic('plus')}箱を登録する</button></div>`}</div></div>`,
     it.note && `<div class="info-row">${ic('note')}<div><div class="k">メモ</div><div class="v">${esc(it.note)}</div></div></div>`,
     `<div class="info-row">${ic('clock')}<div><div class="k">登録日</div><div class="v">${fmtDate(it.createdAt)}${it.updatedAt && it.updatedAt - it.createdAt > 60000 ? `（${fmtDate(it.updatedAt)} 更新）` : ''}</div></div></div>`,
   ].filter(Boolean);
@@ -754,6 +783,24 @@ function itemView(id) {
     toast(`「${pathText(r.locationId)}」に移動しました`);
     render();
   };
+  // 箱：登録・場所を変える・なくす
+  const boxSet = async (title, current) => {
+    const r = await pickLocation(title, current, { sameOption: true });
+    if (!r) return;
+    await saveItems([{ ...item(id), box: boxFrom(r.locationId) }]);
+    toast(r.locationId === SAME ? '箱を本体と同じ場所にしました' : `箱を「${pathText(r.locationId)}」に置きました`);
+    render();
+  };
+  $view.querySelector('[data-q="boxAdd"]')?.addEventListener('click', () => boxSet('箱を登録', SAME));
+  $view.querySelector('[data-q="boxMove"]')?.addEventListener('click', () => boxSet('箱の場所を変える', it.box?.same ? SAME : it.box?.locationId ?? null));
+  $view.querySelector('[data-q="boxDel"]')?.addEventListener('click', async () => {
+    if (!(await confirmSheet('箱なしにする', 'このアイテムの箱の登録を外します。アイテム自体は消えません。', '箱なしにする'))) return;
+    const v = { ...item(id) };
+    delete v.box;
+    await saveItems([v]);
+    toast('箱なしにしました');
+    render();
+  });
   $view.querySelector('[data-q="tags"]').onclick = async () => {
     const d = await sheet('タグを編集', tagPicker(it.tags ?? []), '保存');
     if (!d) return;
@@ -789,6 +836,12 @@ function itemEdit(id, q) {
           <div class="stepper"><button type="button" data-d="-1" aria-label="1つ減らす">${ic('minus')}</button><input name="quantity" type="number" inputmode="numeric" min="0" step="1" value="${it.quantity ?? 1}" aria-label="数量"><button type="button" data-d="1" aria-label="1つ増やす">${ic('plus')}</button></div>
         </div>
         <label class="frow"><span>場所</span><select name="locationId"><option value="">場所未設定</option>${locOptions(it.locationId)}</select></label>
+        <label class="frow"><span>箱</span><select name="box">
+          <option value="" ${!it.box ? 'selected' : ''}>箱なし</option>
+          <option value="${SAME}" ${it.box?.same ? 'selected' : ''}>あり（本体と同じ場所）</option>
+          <option value="${UNSET}" ${it.box && !it.box.same && !it.box.locationId ? 'selected' : ''}>あり（置き場所は未設定）</option>
+          <optgroup label="あり（別の場所に置いている）">${locOptions(it.box && !it.box.same ? it.box.locationId : '__none')}</optgroup>
+        </select></label>
       </div>
       <div class="group-title">タグ</div>
       <div class="group">
@@ -856,12 +909,14 @@ function itemEdit(id, q) {
       name,
       quantity: Math.max(0, parseInt(f.quantity.value, 10) || 0),
       locationId: f.locationId.value || null,
+      box: f.box.value ? boxFrom(f.box.value) : undefined,
       tags: readTags(f),
       note: f.note.value.trim(),
       photos: [...added.map(a => a.key).reverse(), ...kept],
       createdAt: it.createdAt ?? Date.now(),
       updatedAt: Date.now(),
     };
+    if (!v.box) delete v.box;
     await db.write(s => {
       for (const a of added) {
         s.photos.put({ id: a.key, blob: a.blob });
@@ -928,7 +983,7 @@ function searchView(_, q) {
     const active = words.length || tags.size;
     const matched = I.filter(it => {
       if ([...tags].some(t => !hasTag(it, t))) return false;
-      const hay = [it.name, it.note, ...(it.tags ?? []), pathText(it.locationId)].join(' ').toLowerCase();
+      const hay = haystack(it);
       return words.every(w => hay.includes(w));
     }).sort(byName);
     const hits = active ? matched : [];
@@ -1190,7 +1245,7 @@ async function settingsView() {
     <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
 
     <div class="group-title">このアプリについて</div>
-    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.18</span></div></div>`;
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.19</span></div></div>`;
 
   const $export = $view.querySelector('#export');
   $export.onclick = async () => {
@@ -1551,10 +1606,10 @@ async function confirmSheet(title, message, okLabel = 'OK', danger = false) {
 const tagPicker = current => `<div class="group"><div class="frow col">${tagEditor(current)}</div></div>`;
 
 // 移動先を選ぶ。まだない場所は名前を入れればその場で作る（「押し入れ > 箱A」のように書ける）
-const pickLocation = async (title, current = null, { exclude = new Set(), noneLabel = '場所未設定' } = {}) => {
+const pickLocation = async (title, current = null, { exclude = new Set(), noneLabel = '場所未設定', sameOption = false } = {}) => {
   const d = await sheet(title, `
     <div class="group">
-      <label class="frow"><span>場所</span><select name="loc"><option value="">${noneLabel}</option>${locOptions(current, exclude)}</select></label>
+      <label class="frow"><span>場所</span><select name="loc">${sameOption ? `<option value="${SAME}" ${current === SAME ? 'selected' : ''}>本体と同じ場所</option>` : ''}<option value="" ${sameOption && current === null ? 'selected' : ''}>${noneLabel}</option>${locOptions(current, exclude)}</select></label>
       <label class="frow"><span>新規</span><input name="newLoc" placeholder="新しい場所（例：押し入れ > 箱A）" autocomplete="off"></label>
     </div>
     <p class="footnote">新しい場所の名前を入れると、その場所を作って移動します。</p>`, '移動する');
@@ -1577,6 +1632,13 @@ async function saveItems(list) {
   await load();
 }
 const bulkOps = {
+  async boxMove(ids) {
+    const r = await pickLocation(`${ids.length} 件の箱の場所`, SAME, { sameOption: true });
+    if (!r) return false;
+    await saveItems(pickItems(ids).map(it => ({ ...it, box: boxFrom(r.locationId) })));
+    toast(r.locationId === SAME ? `${ids.length} 件の箱を本体と同じ場所にしました` : `${ids.length} 件の箱を「${pathText(r.locationId)}」に置きました`);
+    return true;
+  },
   async move(ids) {
     const r = await pickLocation(`${ids.length} 件の場所を移動`);
     if (!r) return false;
@@ -1623,6 +1685,7 @@ const BULK_BUTTONS = `
   <button type="button" data-act="move">${ic('pin')}<span>場所を移動</span></button>
   <button type="button" data-act="tagAdd">${ic('tag')}<span>タグ追加</span></button>
   <button type="button" data-act="tagRemove">${ic('x')}<span>タグを外す</span></button>
+  <button type="button" data-act="boxMove">${ic('box')}<span>箱の場所</span></button>
   <button type="button" data-act="del" class="danger">${ic('trash')}<span>削除</span></button>`;
 
 // ---------- 選択モード：カードを長押し（または「選択」）で複数選び、下のバーでまとめて操作する ----------
@@ -1765,7 +1828,7 @@ function bulkView(_, q) {
       if (inScope && !inScope.has(it.locationId)) return false;
       if (unplacedOnly && it.locationId) return false;
       if (tags.some(t => !hasTag(it, t))) return false;
-      const hay = [it.name, it.note, ...(it.tags ?? []), pathText(it.locationId)].join(' ').toLowerCase();
+      const hay = haystack(it);
       return words.every(w => hay.includes(w));
     }).sort(byName);
     $rows.innerHTML = visible.length
@@ -1899,7 +1962,10 @@ async function planMerge(data) {
       seen.add(p.id);
     }
   }
-  for (const it of items) if (it.locationId && !byId.has(it.locationId)) it.locationId = null;
+  for (const it of items) {
+    if (it.locationId && !byId.has(it.locationId)) it.locationId = null;
+    if (it.box?.locationId && !byId.has(it.box.locationId)) it.box = { locationId: null };
+  }
 
   // 写真は、残るアイテムが使っていて、まだこの端末にないものだけ取り込む
   const need = new Set(items.flatMap(i => i.photos ?? []));
@@ -2097,7 +2163,7 @@ function itemsView(_, q) {
   function draw() {
     const words = text.toLowerCase().split(/\s+/).filter(Boolean);
     const list = I.filter(it => {
-      const hay = [it.name, it.note, ...(it.tags ?? []), pathText(it.locationId)].join(' ').toLowerCase();
+      const hay = haystack(it);
       return words.every(w => hay.includes(w));
     });
     $view.querySelector('#list').innerHTML = list.length
@@ -2128,7 +2194,7 @@ const inInstalledApp = () => matchMedia('(display-mode: standalone)').matches ||
 // ---------- 場所に入れる：写真の一覧から、今あるアイテムを選んでこの場所に移す ----------
 // 「場所未設定」と「ほかの場所にあるもの」を分けて並べる。タップで選ぶ／外す
 const pickCard = it => `<button type="button" class="item-card" data-pid="${it.id}">
-    <span class="card-media">${media(it)}<span class="qty-badge">×${it.quantity ?? 1}</span></span>
+    <span class="card-media">${media(it)}${boxBadge(it)}<span class="qty-badge">×${it.quantity ?? 1}</span></span>
     <span class="card-body"><span class="card-name">${esc(it.name)}</span><span class="card-sub">${esc(it.locationId ? pathText(it.locationId) : tagText(it) || '場所未設定')}</span></span>
   </button>`;
 
@@ -2153,7 +2219,7 @@ function putView(id) {
   function draw() {
     const words = text.toLowerCase().split(/\s+/).filter(Boolean);
     const match = it => {
-      const hay = [it.name, it.note, ...(it.tags ?? []), pathText(it.locationId)].join(' ').toLowerCase();
+      const hay = haystack(it);
       return words.every(w => hay.includes(w));
     };
     const unplaced = I.filter(it => !it.locationId && match(it)).sort(byName);
