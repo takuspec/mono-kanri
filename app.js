@@ -1,6 +1,6 @@
-import * as db from './db.js?v=11';
-import { readZip } from './zip.js?v=11';
-import { decodeCsv, parseCsv, toCsv } from './csv.js?v=11';
+import * as db from './db.js?v=12';
+import { readZip } from './zip.js?v=12';
+import { decodeCsv, parseCsv, toCsv } from './csv.js?v=12';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -171,6 +171,8 @@ function hydratePhotos(root = $view) {
   root.querySelectorAll('img[data-photo]').forEach(async img => {
     img.src = await photoUrl(img.dataset.photo, 'full' in img.dataset ? 'photos' : 'thumbs');
   });
+  // 一覧を描き直したあと（絞り込み・表示切り替えなど）も、選択中の印を付け直す
+  if (sel.on) drawSel();
 }
 const THUMB = [360, 0.75];
 // サムネイルがない写真（前の版で保存したもの・古いバックアップ）に後から作る
@@ -209,14 +211,14 @@ const tagText = it => (it.tags ?? []).map(t => '#' + t).join(' ');
 function itemCard(it, showPath = false) {
   const q = it.quantity ?? 1;
   const sub = showPath ? pathText(it.locationId) : tagText(it) || pathText(it.locationId);
-  return `<a class="item-card" href="#/item/${it.id}">
+  return `<a class="item-card" href="#/item/${it.id}" data-id="${it.id}">
     <span class="card-media">${media(it)}<span class="qty-badge ${q === 0 ? 'zero' : ''}">×${q}</span></span>
     <span class="card-body"><span class="card-name">${esc(it.name)}</span><span class="card-sub">${esc(sub)}</span></span>
   </a>`;
 }
 function itemRow(it, showPath = false) {
   const sub = [showPath ? pathText(it.locationId) : '', tagText(it)].filter(Boolean).join('　');
-  return `<a class="row" href="#/item/${it.id}">
+  return `<a class="row" href="#/item/${it.id}" data-id="${it.id}">
     <span class="row-media">${media(it)}</span>
     <span class="row-main"><span class="row-title">${esc(it.name)}</span>${sub ? `<span class="row-sub">${esc(sub)}</span>` : ''}</span>
     <span class="row-qty">×${it.quantity ?? 1}</span>${ic('chevR', 'row-chev')}
@@ -319,7 +321,7 @@ function locView(id) {
   if (!l) return notFound(true);
   setHeader(l.name, {
     back: l.parentId ? `#/loc/${l.parentId}` : '#/',
-    actions: iconBtn(`#/bulk?loc=${id}`, 'table', '一覧で編集') + iconBtn(`#/label/${id}`, 'qr', 'QRラベル') + iconBtn(`#/loc/${id}/edit`, 'edit', '編集'),
+    actions: iconBtn(`#/bulk?loc=${id}`, 'table', '一覧で編集'),
   });
   const kids = childLocs(id);
   const its = itemsIn(id);
@@ -332,16 +334,31 @@ function locView(id) {
       <div><h1 class="large">${esc(l.name)}</h1><p class="meta">${meta}</p></div>
     </header>
     ${l.note ? `<p class="note-text">${esc(l.note)}</p>` : ''}
+    <div class="quick-actions">
+      <button type="button" data-q="moveLoc">${ic('layers')}<span>この場所を移動</span></button>
+      <a href="#/label/${id}">${ic('qr')}<span>QRラベル</span></a>
+      <a href="#/loc/${id}/edit">${ic('edit')}<span>名前・アイコン</span></a>
+    </div>
     ${secHead('中の場所', kids.length || '', kids.length ? `<a class="link" href="#/loc/new/edit?parent=${id}">${ic('plus')}追加</a>` : '')}
     ${kids.length
       ? `<div class="place-grid">${kids.map(placeCard).join('')}</div>`
       : `<a class="add-tile" href="#/loc/new/edit?parent=${id}">${ic('plus')}この中に場所を追加（棚・引き出し・箱など）</a>`}
-    ${secHead('アイテム', its.length, its.length ? viewToggle(mode) : '')}
+    ${secHead('アイテム', its.length, its.length ? selectBtn() + viewToggle(mode) : '')}
     ${its.length
       ? itemsBlock(its, mode)
       : empty('image', 'まだアイテムがありません', '下の ＋ ボタンから、写真を撮って追加できます')}
-    <a class="add-tile" href="#/text?loc=${id}" style="margin-top:12px">${ic('note')}テキストでまとめて追加</a>`;
+    <a class="add-tile" href="#/text?loc=${id}" style="margin-top:12px">${ic('note')}テキストでまとめて追加</a>
+    ${its.length ? '<p class="footnote">アイテムを長押しすると、複数選んでまとめて移動・タグ付け・削除ができます。</p>' : ''}`;
   bindViewToggle();
+  $view.querySelector('[data-q="moveLoc"]').onclick = async () => {
+    // 自分自身と、自分の中の場所には移せない
+    const r = await pickLocation(`「${esc(l.name)}」の移動先`, l.parentId, { exclude: new Set(descendantIds(id)), noneLabel: 'いちばん上' });
+    if (!r || r.locationId === (l.parentId ?? null)) return;
+    await db.put('locations', { ...loc(id), parentId: r.locationId, updatedAt: Date.now() });
+    await load();
+    toast(`「${r.locationId ? pathText(r.locationId) : 'いちばん上'}」に移動しました`);
+    render();
+  };
 }
 
 function locEdit(id, q) {
@@ -399,7 +416,7 @@ function locEdit(id, q) {
     const msg = kids.length || its.length
       ? `「${l.name}」を削除します。中の場所 ${kids.length} 件とアイテム ${its.length} 件は${dest}に移動します。`
       : `「${l.name}」を削除しますか？`;
-    if (!confirm(msg)) return;
+    if (!(await confirmSheet('この場所を削除', msg, '削除する', true))) return;
     const now = Date.now();
     await db.write(s => {
       for (const k of kids) s.locations.put({ ...k, parentId: l.parentId ?? null, updatedAt: now });
@@ -441,6 +458,11 @@ function itemView(id) {
         <span class="lbl">数量<b>いくつある？</b></span>
         <div class="stepper"><button id="dec" aria-label="1つ減らす">${ic('minus')}</button><span class="n" id="qty">${it.quantity ?? 1}</span><button id="inc" aria-label="1つ増やす">${ic('plus')}</button></div>
       </div>
+      <div class="quick-actions">
+        <button type="button" data-q="move">${ic('pin')}<span>場所を移動</span></button>
+        <button type="button" data-q="tags">${ic('tag')}<span>タグを編集</span></button>
+        <a href="#/item/${id}/edit">${ic('edit')}<span>名前・写真など</span></a>
+      </div>
     </div>
     <div class="group" style="margin-top:16px">${rows.join('')}</div>
     <div class="group" style="margin-top:28px"><button class="row-btn danger" id="del">${ic('trash')}<span>このアイテムを削除</span></button></div>`;
@@ -462,16 +484,21 @@ function itemView(id) {
   $view.querySelector('#dec').onclick = () => step(-1);
   $view.querySelector('#inc').onclick = () => step(1);
   $view.querySelector('#del').onclick = async () => {
-    if (!confirm(`「${it.name}」を削除しますか？`)) return;
-    await db.write(s => {
-      s.items.delete(id);
-      for (const p of it.photos ?? []) { s.photos.delete(p); s.thumbs.delete(p); }
-    });
-    await addTombstones([id]);
-    (it.photos ?? []).forEach(forgetPhoto);
-    await load();
-    toast('削除しました');
-    location.replace(it.locationId ? `#/loc/${it.locationId}` : '#/');
+    if (await bulkOps.del([id])) location.replace(it.locationId ? `#/loc/${it.locationId}` : '#/');
+  };
+  $view.querySelector('[data-q="move"]').onclick = async () => {
+    const r = await pickLocation(`「${esc(it.name)}」を移動`, it.locationId);
+    if (!r || r.locationId === (it.locationId ?? null)) return;
+    await saveItems([{ ...item(id), locationId: r.locationId }]);
+    toast(`「${pathText(r.locationId)}」に移動しました`);
+    render();
+  };
+  $view.querySelector('[data-q="tags"]').onclick = async () => {
+    const d = await sheet('タグを編集', tagPicker(it.tags ?? []), '保存');
+    if (!d) return;
+    await saveItems([{ ...item(id), tags: parseTags(d.querySelector('[name=tags]').value) }]);
+    toast('タグを保存しました');
+    render();
   };
 }
 
@@ -647,7 +674,7 @@ function searchView(_, q) {
     $view.querySelector('#results').innerHTML = !active
       ? `<div style="margin-top:20px">${empty('search', '何を探しますか？', tagList.length ? 'キーワードを入力するか、上のタグを選んでください' : 'キーワードを入力してください')}</div>`
       : hits.length
-        ? `<div class="sec-head" style="margin-top:22px"><h2>${hits.length} 件</h2><span class="spacer"></span><a class="link" href="#/bulk?${qs}">${ic('table')}一覧で編集</a>${viewToggle(mode)}</div>${itemsBlock(hits, mode, true)}`
+        ? `<div class="sec-head" style="margin-top:22px"><h2>${hits.length} 件</h2><span class="spacer"></span>${selectBtn()}<a class="icon-btn" href="#/bulk?${qs}" aria-label="一覧で編集">${ic('table')}</a>${viewToggle(mode)}</div>${itemsBlock(hits, mode, true)}`
         : `<div style="margin-top:20px">${empty('search', '見つかりませんでした', '別のことばで試してみてください')}</div>`;
     bindViewToggle();
     hydratePhotos();
@@ -892,7 +919,7 @@ async function settingsView() {
     <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
 
     <div class="group-title">このアプリについて</div>
-    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.10</span></div></div>`;
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.11</span></div></div>`;
 
   const $export = $view.querySelector('#export');
   $export.onclick = async () => {
@@ -924,7 +951,7 @@ async function settingsView() {
     } catch {
       return toast('このアプリのバックアップファイルではないようです', 'error');
     }
-    if (!confirm(`今のデータを消して、バックアップ（場所 ${data.locations.length}・アイテム ${data.items.length}・写真 ${data.photos.length} 枚）に置き換えます。よろしいですか？`)) return;
+    if (!(await confirmSheet('バックアップから復元', `今のデータを消して、バックアップ（場所 ${data.locations.length}・アイテム ${data.items.length}・写真 ${data.photos.length} 枚）に置き換えます。`, '置き換える', true))) return;
     await db.replaceAll(data);
     for (const u of photoUrls.values()) if (u) URL.revokeObjectURL(u);
     photoUrls.clear();
@@ -1212,12 +1239,22 @@ function sheetDialog() {
   }
   return d;
 }
-function sheet(title, body, okLabel) {
+function sheet(title, body, okLabel, danger = false) {
   const d = sheetDialog();
   d.innerHTML = `<form method="dialog" class="sheet-body">
     <h3>${title}</h3>${body}
-    <div class="save-row"><button type="button" class="btn" data-cancel>キャンセル</button><button value="ok" class="btn primary">${okLabel}</button></div>
+    <div class="save-row"><button type="button" class="btn" data-cancel>キャンセル</button><button value="ok" class="btn primary${danger ? ' danger' : ''}">${okLabel}</button></div>
   </form>`;
+  // タグの候補チップを押したら、入力欄に足す／外す
+  d.onclick = e => {
+    const chip = e.target.closest('[data-t]');
+    const input = d.querySelector('[name=tags]');
+    if (!chip || !input) return;
+    const cur = parseTags(input.value);
+    const t = chip.dataset.t;
+    input.value = (cur.includes(t) ? cur.filter(x => x !== t) : [...cur, t]).join(' ');
+    chip.classList.toggle('on', !cur.includes(t));
+  };
   d.showModal();
   // 閉じたときのイベントは画面が止まっていると届かないことがあるので、ボタンを押した時点で返す
   return new Promise(res => {
@@ -1227,11 +1264,21 @@ function sheet(title, body, okLabel) {
     d.oncancel = () => done(false); // Esc キーなど
   });
 }
+// ブラウザの確認ダイアログの代わり（ダイアログが出ないブラウザでも使える）
+async function confirmSheet(title, message, okLabel = 'OK', danger = false) {
+  const body = message ? `<p class="sheet-msg">${esc(message).replace(/\n/g, '<br>')}</p>` : '';
+  return !!(await sheet(title, body, okLabel, danger));
+}
+const tagPicker = current => `
+  <div class="group"><label class="frow col"><input name="tags" value="${esc(current.join(' '))}" placeholder="タグ（スペース区切り）" autocomplete="off"></label></div>
+  ${allTags().length ? `<div class="chips sheet-chips">${allTags().map(t =>
+    `<button type="button" class="chip ${current.includes(t) ? 'on' : ''}" data-t="${esc(t)}">#${esc(t)}</button>`).join('')}</div>` : ''}`;
+
 // 移動先を選ぶ。まだない場所は名前を入れればその場で作る（「押し入れ > 箱A」のように書ける）
-const pickLocation = async (title, current = null) => {
+const pickLocation = async (title, current = null, { exclude = new Set(), noneLabel = '場所未設定' } = {}) => {
   const d = await sheet(title, `
     <div class="group">
-      <label class="frow"><span>場所</span><select name="loc"><option value="">場所未設定</option>${locOptions(current)}</select></label>
+      <label class="frow"><span>場所</span><select name="loc"><option value="">${noneLabel}</option>${locOptions(current, exclude)}</select></label>
       <label class="frow"><span>新規</span><input name="newLoc" placeholder="新しい場所（例：押し入れ > 箱A）" autocomplete="off"></label>
     </div>
     <p class="footnote">新しい場所の名前を入れると、その場所を作って移動します。</p>`, '移動する');
@@ -1245,6 +1292,147 @@ const pickLocation = async (title, current = null) => {
   }
   return { locationId: items[0].locationId };
 };
+
+// ---------- 選んだアイテムへの一括操作（選択モード・一覧で編集・アイテム画面で共通）。変えたら true ----------
+const pickItems = ids => { const set = new Set(ids); return I.filter(i => set.has(i.id)); };
+async function saveItems(list) {
+  const now = Date.now();
+  await db.write(s => list.forEach(it => s.items.put({ ...it, updatedAt: now })));
+  await load();
+}
+const bulkOps = {
+  async move(ids) {
+    const r = await pickLocation(`${ids.length} 件の場所を移動`);
+    if (!r) return false;
+    // 新しい場所を作ると読み直すので、アイテムはそのあとで取り直す
+    await saveItems(pickItems(ids).map(it => ({ ...it, locationId: r.locationId })));
+    toast(`${ids.length} 件を「${pathText(r.locationId)}」に移動しました`);
+    return true;
+  },
+  async tagAdd(ids) {
+    const d = await sheet(`${ids.length} 件にタグを追加`, tagPicker([]), '追加する');
+    const add = d ? parseTags(d.querySelector('[name=tags]').value) : [];
+    if (!add.length) return false;
+    await saveItems(pickItems(ids).map(it => ({ ...it, tags: [...new Set([...(it.tags ?? []), ...add])] })));
+    toast(`${ids.length} 件に ${add.map(t => '#' + t).join(' ')} を追加しました`);
+    return true;
+  },
+  async tagRemove(ids) {
+    const present = [...new Set(pickItems(ids).flatMap(i => i.tags ?? []))].sort((a, b) => a.localeCompare(b, 'ja'));
+    if (!present.length) { toast('選んだアイテムにはタグがありません', 'error'); return false; }
+    const d = await sheet(`${ids.length} 件からタグを外す`,
+      `<div class="chips sheet-chips">${present.map(t => `<label class="chip toggle"><input type="checkbox" name="t" value="${esc(t)}">#${esc(t)}</label>`).join('')}</div>`, '外す');
+    const rm = d ? [...d.querySelectorAll('[name=t]:checked')].map(c => c.value) : [];
+    if (!rm.length) return false;
+    await saveItems(pickItems(ids).map(it => ({ ...it, tags: (it.tags ?? []).filter(t => !rm.includes(t)) })));
+    toast(`${ids.length} 件から ${rm.map(t => '#' + t).join(' ')} を外しました`);
+    return true;
+  },
+  async del(ids) {
+    const list = pickItems(ids);
+    const what = list.length === 1 ? `「${list[0].name}」` : `${list.length} 件のアイテム`;
+    if (!(await confirmSheet(`${what}を削除`, '写真も一緒に消えます。元に戻せません。', '削除する', true))) return false;
+    await db.write(s => list.forEach(it => {
+      s.items.delete(it.id);
+      for (const p of it.photos ?? []) { s.photos.delete(p); s.thumbs.delete(p); }
+    }));
+    await addTombstones(list.map(it => it.id));
+    list.forEach(it => (it.photos ?? []).forEach(forgetPhoto));
+    await load();
+    toast(`${list.length} 件を削除しました`);
+    return true;
+  },
+};
+const BULK_BUTTONS = `
+  <button type="button" data-act="move">${ic('pin')}<span>場所を移動</span></button>
+  <button type="button" data-act="tagAdd">${ic('tag')}<span>タグ追加</span></button>
+  <button type="button" data-act="tagRemove">${ic('x')}<span>タグを外す</span></button>
+  <button type="button" data-act="del" class="danger">${ic('trash')}<span>削除</span></button>`;
+
+// ---------- 選択モード：カードを長押し（または「選択」）で複数選び、下のバーでまとめて操作する ----------
+const sel = { on: false, ids: new Set(), bar: null };
+const cardOf = el => el.closest('.item-card[data-id], .row[data-id]');
+const visibleIds = () => [...new Set([...$view.querySelectorAll('.item-card[data-id], .row[data-id]')].map(e => e.dataset.id))];
+const selectBtn = () => `<button type="button" class="link" data-select-start>${ic('check')}選択</button>`;
+
+function startSelect(firstId) {
+  if (!sel.on) {
+    sel.on = true;
+    sel.ids.clear();
+    document.body.classList.add('selecting');
+    sel.bar = Object.assign(document.createElement('div'), { className: 'bulkbar selbar' });
+    sel.bar.innerHTML = `
+      <div class="sel-top"><button type="button" class="link" data-sel-all></button><span class="sel-count"></span><button type="button" class="link" data-sel-done>完了</button></div>
+      <div class="bulk-actions">${BULK_BUTTONS}</div>`;
+    sel.bar.onclick = async e => {
+      if (e.target.closest('[data-sel-done]')) return exitSelect();
+      if (e.target.closest('[data-sel-all]')) {
+        const all = visibleIds();
+        const every = all.every(id => sel.ids.has(id));
+        all.forEach(id => (every ? sel.ids.delete(id) : sel.ids.add(id)));
+        return drawSel();
+      }
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (act && sel.ids.size && await bulkOps[act]([...sel.ids])) {
+        exitSelect();
+        render();
+      }
+    };
+    document.body.append(sel.bar);
+  }
+  if (firstId) sel.ids.add(firstId);
+  drawSel();
+}
+function exitSelect() {
+  if (!sel.on) return;
+  sel.on = false;
+  sel.ids.clear();
+  sel.bar?.remove();
+  sel.bar = null;
+  document.body.classList.remove('selecting');
+  $view.querySelectorAll('.picked').forEach(e => e.classList.remove('picked'));
+}
+function drawSel() {
+  if (!sel.on) return;
+  $view.querySelectorAll('.item-card[data-id], .row[data-id]').forEach(e => e.classList.toggle('picked', sel.ids.has(e.dataset.id)));
+  sel.bar.querySelector('.sel-count').textContent = sel.ids.size ? `${sel.ids.size} 件を選択中` : 'タップして選んでください';
+  sel.bar.querySelectorAll('[data-act]').forEach(b => { b.disabled = !sel.ids.size; });
+  const all = visibleIds();
+  sel.bar.querySelector('[data-sel-all]').textContent = all.length && all.every(id => sel.ids.has(id)) ? '選択を解除' : 'すべて選択';
+}
+(function bindSelect() {
+  let timer = null, start = null, longPressed = false;
+  const cancel = () => clearTimeout(timer);
+  $view.addEventListener('pointerdown', e => {
+    longPressed = false;
+    const c = cardOf(e.target);
+    if (!c || sel.on || document.body.classList.contains('editing')) return;
+    start = [e.clientX, e.clientY];
+    timer = setTimeout(() => {
+      longPressed = true;
+      navigator.vibrate?.(15);
+      startSelect(c.dataset.id);
+    }, 450);
+  });
+  $view.addEventListener('pointerup', cancel);
+  $view.addEventListener('pointercancel', cancel);
+  $view.addEventListener('pointermove', e => {
+    if (start && Math.hypot(e.clientX - start[0], e.clientY - start[1]) > 10) cancel();
+  });
+  // 長押しで出るブラウザのメニュー（リンクのプレビューなど）を出さない
+  $view.addEventListener('contextmenu', e => { if (cardOf(e.target)) e.preventDefault(); });
+  $view.addEventListener('click', e => {
+    if (e.target.closest('[data-select-start]')) return startSelect();
+    const c = cardOf(e.target);
+    if (!c) return;
+    if (longPressed) { e.preventDefault(); longPressed = false; return; }
+    if (!sel.on) return;
+    e.preventDefault(); // 選択モード中は開かずに、選ぶ／外す
+    const id = c.dataset.id;
+    sel.ids.has(id) ? sel.ids.delete(id) : sel.ids.add(id);
+    drawSel();
+  });
+})();
 
 function bulkView(_, q) {
   const locId = q.get('loc');
@@ -1273,12 +1461,7 @@ function bulkView(_, q) {
     <p class="footnote">セルをタップするとその場で直せます。入力し終えると自動で保存されます。</p>
     <div class="bulkbar" id="bar">
       <span class="sel-count" id="selcnt"></span>
-      <div class="bulk-actions">
-        <button type="button" data-act="tagAdd">${ic('tag')}<span>タグ追加</span></button>
-        <button type="button" data-act="tagRemove">${ic('x')}<span>タグを外す</span></button>
-        <button type="button" data-act="move">${ic('pin')}<span>場所を移動</span></button>
-        <button type="button" data-act="del" class="danger">${ic('trash')}<span>削除</span></button>
-      </div>
+      <div class="bulk-actions">${BULK_BUTTONS}</div>
     </div>
 `;
 
@@ -1378,72 +1561,11 @@ function bulkView(_, q) {
     b.textContent = pathText(it.locationId);
   });
 
-  const targets = () => I.filter(i => selected.has(i.id));
-  const saveAll = async (list, msg) => {
-    const now = Date.now();
-    await db.write(s => list.forEach(it => { it.updatedAt = now; s.items.put(it); }));
-    toast(msg);
-    draw();
-  };
-  const actions = {
-    async tagAdd() {
-      const list = targets();
-      const d = await sheet(`${list.length} 件にタグを追加`, `
-        <div class="group"><label class="frow col"><input name="tags" placeholder="追加するタグ（スペース区切り）" autocomplete="off"></label></div>
-        ${allTags().length ? `<div class="chips sheet-chips">${allTags().map(t => `<button type="button" class="chip" data-t="${esc(t)}">#${esc(t)}</button>`).join('')}</div>` : ''}`, '追加する');
-      if (!d) return;
-      const add = parseTags(d.querySelector('[name=tags]').value);
-      if (!add.length) return;
-      list.forEach(it => { it.tags = [...new Set([...(it.tags ?? []), ...add])]; });
-      await saveAll(list, `${list.length} 件に ${add.map(t => '#' + t).join(' ')} を追加しました`);
-    },
-    async tagRemove() {
-      const list = targets();
-      const present = [...new Set(list.flatMap(i => i.tags ?? []))].sort((a, b) => a.localeCompare(b, 'ja'));
-      if (!present.length) return toast('選んだアイテムにはタグがありません', 'error');
-      const d = await sheet(`${list.length} 件からタグを外す`,
-        `<div class="chips sheet-chips">${present.map(t => `<label class="chip toggle"><input type="checkbox" name="t" value="${esc(t)}">#${esc(t)}</label>`).join('')}</div>`, '外す');
-      if (!d) return;
-      const rm = [...d.querySelectorAll('[name=t]:checked')].map(c => c.value);
-      if (!rm.length) return;
-      list.forEach(it => { it.tags = (it.tags ?? []).filter(t => !rm.includes(t)); });
-      await saveAll(list, `${list.length} 件から ${rm.map(t => '#' + t).join(' ')} を外しました`);
-    },
-    async move() {
-      const r = await pickLocation(`${selected.size} 件の場所を移動`);
-      if (!r) return;
-      // 新しい場所を作ると読み直すので、選んだアイテムはそのあとで取り直す
-      const list = targets();
-      list.forEach(it => { it.locationId = r.locationId; });
-      await saveAll(list, `${list.length} 件を「${pathText(r.locationId)}」に移動しました`);
-    },
-    async del() {
-      const list = targets();
-      if (!confirm(`${list.length} 件のアイテムを削除します。写真も消えます。よろしいですか？`)) return;
-      await db.write(s => list.forEach(it => {
-        s.items.delete(it.id);
-        for (const p of it.photos ?? []) { s.photos.delete(p); s.thumbs.delete(p); }
-      }));
-      await addTombstones(list.map(it => it.id));
-      list.forEach(it => (it.photos ?? []).forEach(forgetPhoto));
-      list.forEach(it => selected.delete(it.id));
-      await load();
-      toast(`${list.length} 件を削除しました`);
-      draw();
-    },
-  };
-  $view.querySelector('#bar').onclick = e => {
+  $view.querySelector('#bar').onclick = async e => {
     const act = e.target.closest('[data-act]')?.dataset.act;
-    if (act && selected.size) actions[act]();
-  };
-  // タグ追加シートの候補チップ → 入力欄に足す
-  sheetDialog().onclick = e => {
-    const t = e.target.closest('[data-t]')?.dataset.t;
-    if (!t) return;
-    const input = e.currentTarget.querySelector('[name=tags]');
-    const cur = parseTags(input.value);
-    input.value = (cur.includes(t) ? cur.filter(x => x !== t) : [...cur, t]).join(' ');
-    e.target.closest('[data-t]').classList.toggle('on', !cur.includes(t));
+    if (!act || !selected.size || !(await bulkOps[act]([...selected]))) return;
+    for (const id of [...selected]) if (!item(id)) selected.delete(id);
+    draw();
   };
 
   draw();
@@ -1549,7 +1671,10 @@ async function mergeFromFile(file, from = 'このファイル') {
     toast(`${from}と同じ内容でした。変更はありません`);
     return true;
   }
-  if (!confirm(`${from}の内容を合わせます。\n\n追加 ${added} 件・更新 ${updated} 件・削除 ${removed} 件\n\n両方で同じものを直していたときは、あとから直した方が残ります。`)) return false;
+  if (!(await confirmSheet('ファイルを合わせて取り込む', `${from}の内容を合わせます。
+追加 ${added} 件・更新 ${updated} 件・削除 ${removed} 件
+
+両方で同じものを直していたときは、あとから直した方が残ります。`, '合わせる'))) return false;
   await applyMerge(plan);
   toast(`合わせました（${statsText(plan.stats)}）`);
   return true;
@@ -1663,7 +1788,7 @@ function itemsView(_, q) {
     <div class="sec-head" style="margin-top:4px">
       <div class="seg text" id="sort">${Object.entries(SORTS).map(([k, [label]]) =>
         `<button type="button" data-sort="${k}" class="${k === sort ? 'on' : ''}">${label}</button>`).join('')}</div>
-      <span class="spacer"></span>${viewToggle(mode)}
+      <span class="spacer"></span>${selectBtn()}${viewToggle(mode)}
     </div>
     <div id="list"></div>
     <a class="add-tile" href="#/bulk" style="margin-top:16px">${ic('table')}一覧で編集する</a>`;
@@ -1762,6 +1887,7 @@ async function render() {
   document.body.classList.toggle('editing', !!route?.[3]);
   // 画面が変わったときだけ入場アニメーションとスクロール位置のリセットをする
   if (path !== lastPath) {
+    exitSelect();
     $view.style.animation = 'none';
     void $view.offsetWidth;
     $view.style.animation = '';

@@ -686,6 +686,46 @@ body.editing .tabbar { display: none; }
 #live { text-align: right; font-weight: 600; color: var(--text-2); }
 .btn:disabled { opacity: .5; }
 
+/* アイテム・場所の画面のすぐ押せるボタン */
+.quick-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+.quick-actions > * {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  min-height: 64px; padding: 8px 4px; border: 0; border-radius: 14px;
+  background: var(--surface); box-shadow: var(--shadow-sm);
+  color: var(--accent); font-size: 12px; font-weight: 600; text-align: center;
+}
+.quick-actions .ic { width: 22px; height: 22px; }
+.quick-actions > *:active { transform: scale(.96); }
+
+/* 確認のシート */
+.sheet-msg { margin: 0 4px; font-size: 15px; line-height: 1.7; color: var(--text-2); }
+.btn.primary.danger { background: var(--danger); box-shadow: none; color: #fff; }
+
+/* 選択モード（長押し・「選択」） */
+.item-card, .row { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.item-card { position: relative; }
+body.selecting .item-card[data-id]::after, body.selecting .row[data-id]::after {
+  content: ""; position: absolute; z-index: 2; width: 26px; height: 26px; border-radius: 50%;
+  border: 2px solid #fff; background: rgba(15, 23, 41, .28); box-shadow: 0 1px 4px rgba(0, 0, 0, .3);
+}
+body.selecting .item-card[data-id]::after { top: 8px; left: 8px; }
+body.selecting .row[data-id]::after { top: 50%; right: 14px; transform: translateY(-50%); border-color: var(--line); background: var(--surface); box-shadow: none; }
+body.selecting .row[data-id] .row-chev { visibility: hidden; }
+body.selecting .picked::after {
+  background: var(--accent) no-repeat center / 16px
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7.5'/%3E%3C/svg%3E") !important;
+  border-color: #fff !important;
+}
+body.selecting .item-card.picked { box-shadow: 0 0 0 3px var(--accent); }
+body.selecting .item-card.picked .card-media img, body.selecting .item-card.picked .card-media .ph-tile { opacity: .82; }
+body.selecting .row.picked { background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+body.selecting .tabbar { display: none; }
+body.selecting main { padding-bottom: calc(150px + env(safe-area-inset-bottom)); }
+.selbar { z-index: 25; }
+.sel-top { display: flex; align-items: center; justify-content: space-between; max-width: 728px; margin: 0 auto 4px; }
+.sel-top .sel-count { font-size: 13px; font-weight: 700; color: var(--text); }
+.sel-top .link { font-size: 14px; }
+
 /* 容量バー（設定） */
 .usage { padding: 14px 16px; }
 .usage-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
