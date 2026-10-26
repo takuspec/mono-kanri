@@ -35,8 +35,8 @@ python server.py
 - 受け渡し中のファイルは `transfer/` に置かれる（git には入れない）
 
 ファイルを更新したら、次の番号をそろえて上げる（古いファイルと新しいファイルが混ざって動かなくなるのを防ぐため）。
-- `sw.js` の `CACHE`（`mono-kanri-v17` など）
-- `index.html` と `app.js` にある `?v=17`
+- `sw.js` の `CACHE`（`mono-kanri-v18` など）
+- `index.html` と `app.js` にある `?v=18`
 
 ## ファイル
 - `index.html` / `styles.css` / `app.js` … 画面

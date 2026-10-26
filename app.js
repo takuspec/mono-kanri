@@ -1,6 +1,6 @@
-import * as db from './db.js?v=17';
-import { readZip } from './zip.js?v=17';
-import { decodeCsv, parseCsv, toCsv } from './csv.js?v=17';
+import * as db from './db.js?v=18';
+import { readZip } from './zip.js?v=18';
+import { decodeCsv, parseCsv, toCsv } from './csv.js?v=18';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -179,7 +179,7 @@ function bindTagEditors(root) {
       const have = new Set(current());
       const q = input.value.trim().toLowerCase();
       sug.innerHTML = allTags().filter(t => !have.has(t) && (!q || tagPath(t).toLowerCase().includes(q)))
-        .map(t => `<button type="button" class="chip" data-add="${esc(t)}">${tagLabel(t)}</button>`).join('');
+        .map(t => `<button type="button" class="chip ${tagChildren(t).length ? 'parent' : ''}" data-add="${esc(t)}">${tagLabel(t)}</button>`).join('');
     };
     const add = list => {
       for (const t of list) if (!current().includes(t)) input.insertAdjacentHTML('beforebegin', tagChip(t));
@@ -706,7 +706,7 @@ function itemView(id) {
   const where = it.locationId ? pathText(it.locationId) : '場所未設定';
   const rows = [
     it.tags?.length && `<div class="info-row">${ic('tag')}<div><div class="k">タグ</div><div class="chips">${it.tags.map(t =>
-      `<a class="chip soft" href="#/search?tag=${encodeURIComponent(t)}">${tagLabel(t)}</a>`).join('')}</div></div></div>`,
+      `<a class="chip soft ${tagChildren(t).length ? 'parent' : ''}" href="#/search?tag=${encodeURIComponent(t)}">${tagLabel(t)}</a>`).join('')}</div></div></div>`,
     it.note && `<div class="info-row">${ic('note')}<div><div class="k">メモ</div><div class="v">${esc(it.note)}</div></div></div>`,
     `<div class="info-row">${ic('clock')}<div><div class="k">登録日</div><div class="v">${fmtDate(it.createdAt)}${it.updatedAt && it.updatedAt - it.createdAt > 60000 ? `（${fmtDate(it.updatedAt)} 更新）` : ''}</div></div></div>`,
   ].filter(Boolean);
@@ -888,6 +888,26 @@ function itemEdit(id, q) {
   };
 }
 
+// 検索のタグの選び方：いちばん上のタグを並べ、親タグを選ぶと、その下に子タグの段が開く
+function tagFilterChips(selected) {
+  const open = new Set(); // 開く親：選んだ親タグと、選んだタグの上の親たち
+  for (const t of selected) {
+    tagPathList(t).slice(0, -1).forEach(x => open.add(x));
+    if (tagChildren(t).length) open.add(t);
+  }
+  const byJa = list => list.sort((a, b) => a.localeCompare(b, 'ja'));
+  const chip = t => {
+    const kids = tagChildren(t).length;
+    return `<button type="button" class="chip ${kids ? 'parent' : ''} ${open.has(t) ? 'open' : ''} ${selected.has(t) ? 'on' : ''}" data-t="${esc(t)}">#${esc(t)}${kids ? `<span class="kids">${kids}</span>` : ''}</button>`;
+  };
+  let html = `<div class="chips">${byJa(allTags().filter(t => !TP[t])).map(chip).join('')}</div>`;
+  // allTags() は親 → 子の順なので、上の階層の段から順に並ぶ
+  for (const p of allTags().filter(t => open.has(t))) {
+    html += `<div class="chips sub-tags"><span class="sub-label">${esc(tagPath(p))} の中</span>${byJa(tagChildren(p)).map(chip).join('')}</div>`;
+  }
+  return html;
+}
+
 function searchView(_, q) {
   setHeader('検索');
   let text = q.get('q') ?? '';
@@ -896,13 +916,12 @@ function searchView(_, q) {
   $view.innerHTML = `
     <header class="page-head"><h1 class="large">検索</h1></header>
     <div class="search-field"><label>${ic('search')}<input id="q" type="search" enterkeyhint="search" placeholder="名前・メモ・タグ・場所" value="${esc(text)}" autocomplete="off"></label></div>
-    <div class="chips" id="tags"></div>
+    <div class="tag-filter" id="tags"></div>
     <div id="results"></div>`;
   const $q = $view.querySelector('#q');
   function draw() {
     const tagList = allTags();
-    $view.querySelector('#tags').innerHTML = tagList.map(t =>
-      `<button type="button" class="chip ${tags.has(t) ? 'on' : ''}" data-t="${esc(t)}">${tagLabel(t)}</button>`).join('');
+    $view.querySelector('#tags').innerHTML = tagFilterChips(tags);
     const words = text.toLowerCase().split(/\s+/).filter(Boolean);
     const active = words.length || tags.size;
     const hits = active ? I.filter(it => {
@@ -928,7 +947,9 @@ function searchView(_, q) {
   $view.querySelector('#tags').onclick = e => {
     const t = e.target.closest('[data-t]')?.dataset.t;
     if (!t) return;
-    tags.has(t) ? tags.delete(t) : tags.add(t);
+    // 親タグを外したときは、その中で選んでいた子タグも外して段を閉じる
+    if (tags.has(t)) tagDescendants(t).forEach(x => tags.delete(x));
+    else tags.add(t);
     draw();
   };
   draw();
@@ -1165,7 +1186,7 @@ async function settingsView() {
     <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
 
     <div class="group-title">このアプリについて</div>
-    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.16</span></div></div>`;
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.17</span></div></div>`;
 
   const $export = $view.querySelector('#export');
   $export.onclick = async () => {

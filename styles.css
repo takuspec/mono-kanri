@@ -804,6 +804,30 @@ body.editing main:has(.put-bar) { padding-bottom: calc(130px + env(safe-area-ins
 .tag-suggest:empty { display: none; }
 .chip small, .group-label small { font-weight: 500; opacity: .65; margin-right: 2px; }
 
+/* 親タグ（子タグを持つタグ）は、色と形を変えて見分けられるようにする */
+.chip.parent {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface)); color: var(--accent);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.chip.parent .kids {
+  display: inline-grid; place-items: center; min-width: 18px; height: 18px; margin-left: 2px; padding: 0 5px;
+  border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 700;
+}
+.chip.parent::after {
+  content: ""; width: 6px; height: 6px; margin: 0 2px 0 3px;
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg); transition: transform .15s;
+}
+.chip.parent.open::after { transform: rotate(45deg) translate(-2px, -2px); }
+.chip.parent.on { background: var(--accent); color: var(--on-accent); box-shadow: none; }
+.chip.parent.on .kids { background: rgba(255, 255, 255, .28); }
+.tag-filter { margin-top: 2px; }
+.sub-tags {
+  margin-top: 8px; padding: 10px; border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-2));
+}
+.sub-tags .sub-label { width: 100%; font-size: 12px; font-weight: 600; color: var(--text-3); }
+
 /* タグの管理 */
 .tag-row { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 0 6px 0 calc(16px + var(--depth) * 18px); }
 .tag-row .tag-name { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
