@@ -762,6 +762,29 @@ body.editing main:has(.put-bar) { padding-bottom: calc(130px + env(safe-area-ins
 .name-cell .mini img, .name-cell .mini .ph-tile { width: 100%; height: 100%; object-fit: cover; font-size: 14px; }
 .name-cell input { padding-left: 2px !important; }
 
+/* 並べ替え */
+.sort-row { display: flex; margin: -2px 0 12px; }
+.sort-pick {
+  position: relative; display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 28px 0 10px; border-radius: 10px; background: var(--surface-2);
+  color: var(--text); font-size: 13px; font-weight: 600;
+}
+.sort-pick .ic { width: 16px; height: 16px; color: var(--text-2); }
+.sort-pick::after {
+  content: ""; position: absolute; right: 10px; top: 50%; width: 7px; height: 7px; margin-top: -5px;
+  border-right: 2px solid var(--text-3); border-bottom: 2px solid var(--text-3); transform: rotate(45deg); pointer-events: none;
+}
+.sort-pick select {
+  appearance: none; -webkit-appearance: none; border: 0; background: transparent; outline: none;
+  font: inherit; color: inherit; cursor: pointer; padding: 0;
+}
+.group-label {
+  display: flex; align-items: center; gap: 6px; margin: 18px 4px 8px;
+  font-size: 14px; font-weight: 700; color: var(--accent);
+}
+.group-label:first-of-type { margin-top: 4px; }
+.group-label span { font-size: 12px; font-weight: 600; color: var(--text-3); background: var(--surface-2); border-radius: 999px; padding: 0 7px; }
+
 /* 容量バー（設定） */
 .usage { padding: 14px 16px; }
 .usage-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }

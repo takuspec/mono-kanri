@@ -1,6 +1,6 @@
-import * as db from './db.js?v=15';
-import { readZip } from './zip.js?v=15';
-import { decodeCsv, parseCsv, toCsv } from './csv.js?v=15';
+import * as db from './db.js?v=16';
+import { readZip } from './zip.js?v=16';
+import { decodeCsv, parseCsv, toCsv } from './csv.js?v=16';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -403,6 +403,8 @@ function locView(id) {
   const kids = childLocs(id);
   const its = itemsIn(id);
   const mode = pref.get('itemView', 'grid');
+  const PLACE_SORTS = ['new', 'name', 'tag', 'qty'];
+  const sort = PLACE_SORTS.includes(pref.get('placeSort', 'new')) ? pref.get('placeSort', 'new') : 'new';
   const meta = [`${itemCount(id)} アイテム`, kids.length ? `${kids.length} 場所` : ''].filter(Boolean).join(' · ');
   $view.innerHTML = `
     ${crumbs(id)}
@@ -422,11 +424,12 @@ function locView(id) {
       : `<a class="add-tile" href="#/loc/new/edit?parent=${id}">${ic('plus')}この中に場所を追加（棚・引き出し・箱など）</a>`}
     ${secHead('アイテム', its.length, (its.length ? selectBtn() : '') + `<a class="link" href="#/loc/${id}/add">${ic('plus')}アイテムを追加</a>` + (its.length ? viewToggle(mode) : ''))}
     ${its.length
-      ? itemsBlock(its, mode)
+      ? `<div class="sort-row">${sortPicker(PLACE_SORTS, sort)}</div>${sortedBlock(its, sort, mode)}`
       : empty('image', 'まだアイテムがありません', '登録済みのアイテムから選んで入れたり、新しく登録したりできます',
         `<a class="btn primary" href="#/loc/${id}/add">${ic('plus')}アイテムを追加</a>`)}
     ${its.length ? '<p class="footnote">「選択」を押すか写真を長押しすると、写真をタップして選び、まとめて移動・タグ付け・削除ができます。</p>' : ''}`;
   bindViewToggle();
+  $view.querySelector('#sortPick')?.addEventListener('change', e => { pref.set('placeSort', e.target.value); render(); });
   $view.querySelector('[data-q="moveLoc"]').onclick = async () => {
     // 自分自身と、自分の中の場所には移せない
     const r = await pickLocation(`「${esc(l.name)}」の移動先`, l.parentId, { exclude: new Set(descendantIds(id)), noneLabel: 'いちばん上' });
@@ -997,7 +1000,7 @@ async function settingsView() {
     <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
 
     <div class="group-title">このアプリについて</div>
-    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.14</span></div></div>`;
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.15</span></div></div>`;
 
   const $export = $view.querySelector('#export');
   $export.onclick = async () => {
@@ -1866,11 +1869,30 @@ function transferView() {
 }
 
 // ---------- すべてのアイテム（ホームの「一覧を見る →」から。検索結果と同じ見せ方） ----------
+// 並べ替え。タグ順は「名前の順でいちばん先に来るタグ」でまとめ、タグのないものは最後
+const firstTag = it => [...(it.tags ?? [])].sort((a, b) => a.localeCompare(b, 'ja'))[0];
 const SORTS = {
   new: ['新しい順', (a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)],
   name: ['名前順', byName],
+  tag: ['タグ順', (a, b) => (firstTag(a) ?? '￿').localeCompare(firstTag(b) ?? '￿', 'ja') || byName(a, b)],
+  qty: ['数量の多い順', (a, b) => (b.quantity ?? 0) - (a.quantity ?? 0) || byName(a, b)],
   place: ['場所順', (a, b) => pathText(a.locationId).localeCompare(pathText(b.locationId), 'ja') || byName(a, b)],
 };
+const sortPicker = (keys, current) => `<label class="sort-pick">${ic('list')}<select id="sortPick" aria-label="並べ替え">${keys.map(k =>
+  `<option value="${k}" ${k === current ? 'selected' : ''}>${SORTS[k][0]}</option>`).join('')}</select></label>`;
+// 並べ替えて表示する。タグ順のときはタグごとに見出しを付けて分ける
+function sortedBlock(list, sort, mode, showPath = false) {
+  const sorted = [...list].sort(SORTS[sort][1]);
+  if (sort !== 'tag') return itemsBlock(sorted, mode, showPath);
+  const groups = new Map();
+  for (const it of sorted) {
+    const t = firstTag(it) ?? '';
+    if (!groups.has(t)) groups.set(t, []);
+    groups.get(t).push(it);
+  }
+  return [...groups].map(([t, its]) =>
+    `<h3 class="group-label">${t ? '#' + esc(t) : 'タグなし'}<span>${its.length}</span></h3>${itemsBlock(its, mode, showPath)}`).join('');
+}
 
 function itemsView(_, q) {
   setHeader('すべてのアイテム', { back: '#/' });
@@ -1886,8 +1908,7 @@ function itemsView(_, q) {
     <header class="page-head"><h1 class="large">すべてのアイテム</h1><p class="meta">${I.length} 件</p></header>
     <div class="search-field"><label>${ic('search')}<input id="fq" type="search" enterkeyhint="search" placeholder="この中で絞り込む" value="${esc(text)}" autocomplete="off"></label></div>
     <div class="sec-head" style="margin-top:4px">
-      <div class="seg text" id="sort">${Object.entries(SORTS).map(([k, [label]]) =>
-        `<button type="button" data-sort="${k}" class="${k === sort ? 'on' : ''}">${label}</button>`).join('')}</div>
+      ${sortPicker(['new', 'name', 'tag', 'qty', 'place'], sort)}
       <span class="spacer"></span>${selectBtn()}${viewToggle(mode)}
     </div>
     <div id="list"></div>
@@ -1898,9 +1919,9 @@ function itemsView(_, q) {
     const list = I.filter(it => {
       const hay = [it.name, it.note, ...(it.tags ?? []), pathText(it.locationId)].join(' ').toLowerCase();
       return words.every(w => hay.includes(w));
-    }).sort(SORTS[sort][1]);
+    });
     $view.querySelector('#list').innerHTML = list.length
-      ? (words.length ? `<p class="result-count" style="margin-top:4px">${list.length} 件</p>` : '') + itemsBlock(list, mode, true)
+      ? (words.length ? `<p class="result-count" style="margin-top:4px">${list.length} 件</p>` : '') + sortedBlock(list, sort, mode, true)
       : empty('search', '見つかりませんでした', '別のことばで試してみてください');
     hydratePhotos();
     // 戻ってきたとき・表示を切り替えたときに条件が残るよう URL に反映
@@ -1911,12 +1932,9 @@ function itemsView(_, q) {
     history.replaceState(null, '', `#/items${qs ? '?' + qs : ''}`);
   }
   $view.querySelector('#fq').oninput = e => { text = e.target.value; draw(); };
-  $view.querySelector('#sort').onclick = e => {
-    const k = e.target.closest('[data-sort]')?.dataset.sort;
-    if (!k) return;
-    sort = k;
-    pref.set('itemSort', k);
-    $view.querySelectorAll('#sort button').forEach(b => b.classList.toggle('on', b.dataset.sort === k));
+  $view.querySelector('#sortPick').onchange = e => {
+    sort = e.target.value;
+    pref.set('itemSort', sort);
     draw();
   };
   bindViewToggle();
