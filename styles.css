@@ -508,6 +508,7 @@ body.scrolled .search-field { background: var(--bar); -webkit-backdrop-filter: b
 .label svg { width: 100%; height: auto; display: block; }
 .label .lname { font-weight: 800; font-size: 17px; margin-top: 2mm; overflow-wrap: anywhere; }
 .label .lpath { font-size: 11px; color: #5b6474; overflow-wrap: anywhere; margin-top: 1mm; }
+.label .lhint { font-size: 8.5px; color: #98a0ae; margin-top: 1.5mm; }
 .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; padding: 0 16px; font-size: 15px; }
 .switch { position: relative; width: 51px; height: 31px; flex: none; }
 .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }

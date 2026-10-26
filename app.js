@@ -1,6 +1,6 @@
-import * as db from './db.js?v=10';
-import { readZip } from './zip.js?v=10';
-import { decodeCsv, parseCsv, toCsv } from './csv.js?v=10';
+import * as db from './db.js?v=11';
+import { readZip } from './zip.js?v=11';
+import { decodeCsv, parseCsv, toCsv } from './csv.js?v=11';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -316,7 +316,7 @@ function bindBanners() {
 
 function locView(id) {
   const l = loc(id);
-  if (!l) return notFound();
+  if (!l) return notFound(true);
   setHeader(l.name, {
     back: l.parentId ? `#/loc/${l.parentId}` : '#/',
     actions: iconBtn(`#/bulk?loc=${id}`, 'table', '一覧で編集') + iconBtn(`#/label/${id}`, 'qr', 'QRラベル') + iconBtn(`#/loc/${id}/edit`, 'edit', '編集'),
@@ -415,7 +415,7 @@ function locEdit(id, q) {
 
 function itemView(id) {
   const it = item(id);
-  if (!it) return notFound();
+  if (!it) return notFound(true);
   setHeader(it.name, {
     back: it.locationId ? `#/loc/${it.locationId}` : '#/',
     actions: iconBtn(`#/item/${id}/edit`, 'edit', '編集'),
@@ -682,6 +682,7 @@ function labelView(id) {
         ${qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true })}
         <div class="lname">${esc(l.name)}</div>
         ${parent ? `<div class="lpath">${esc(parent)}</div>` : ''}
+        <div class="lhint">モノ管理アプリの「スキャン」で読み取り</div>
         <div class="lpath" id="contents" hidden>${its.map(i => esc(i.name)).join('、')}</div>
       </div>
     </div>
@@ -891,7 +892,7 @@ async function settingsView() {
     <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
 
     <div class="group-title">このアプリについて</div>
-    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.9</span></div></div>`;
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.10</span></div></div>`;
 
   const $export = $view.querySelector('#export');
   $export.onclick = async () => {
@@ -1697,8 +1698,23 @@ function itemsView(_, q) {
   draw();
 }
 
-function notFound() {
+// ホーム画面に追加したアプリとして開いているか（Safari などのブラウザのタブではないか）
+const inInstalledApp = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
+// fromQr：QR ラベルの行き先（場所・アイテム）の画面から来たとき
+function notFound(fromQr = false) {
   setHeader('見つかりません', { back: '#/', always: true });
+  if (fromQr && !inInstalledApp()) {
+    // iPhone のカメラで QR を読むと、ホーム画面のアプリではなく Safari で開く。Safari 側にはアプリのデータがない
+    $view.innerHTML = `<div style="margin-top:12px">
+      ${empty('scan', 'アプリの中で読み取ってください', 'このラベルは、ホーム画面に追加した「モノ管理」で読み取ると開けます。iPhone のカメラで読むと Safari で開いてしまい、アプリのデータが見えません。')}
+      <div class="panel" style="margin-top:14px"><ol class="steps" style="margin:0">
+        <li>ホーム画面の「モノ管理」を開く</li>
+        <li>下のタブの「スキャン」を押す</li>
+        <li>このラベルの QR コードを枠に映す</li>
+      </ol></div></div>`;
+    return;
+  }
   $view.innerHTML = `<div style="margin-top:12px">${empty('info', '見つかりませんでした', '削除されたか、別の端末のデータです')}</div>`;
 }
 
