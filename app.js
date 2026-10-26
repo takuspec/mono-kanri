@@ -1,6 +1,6 @@
-import * as db from './db.js?v=13';
-import { readZip } from './zip.js?v=13';
-import { decodeCsv, parseCsv, toCsv } from './csv.js?v=13';
+import * as db from './db.js?v=14';
+import { readZip } from './zip.js?v=14';
+import { decodeCsv, parseCsv, toCsv } from './csv.js?v=14';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -345,7 +345,6 @@ async function home() {
   const unplaced = itemsIn(null);
   const roots = childLocs(null);
   $view.innerHTML = `${head}${banners}
-    <a class="searchbar" href="#/search">${ic('search')}<span>名前・タグ・場所で探す</span></a>
     <div class="stats">
       <div class="stat accent"><b>${I.length}</b><span>アイテム</span></div>
       <div class="stat"><b>${L.length}</b><span>場所</span></div>
@@ -402,12 +401,12 @@ function locView(id) {
     ${kids.length
       ? `<div class="place-grid">${kids.map(placeCard).join('')}</div>`
       : `<a class="add-tile" href="#/loc/new/edit?parent=${id}">${ic('plus')}この中に場所を追加（棚・引き出し・箱など）</a>`}
-    ${secHead('アイテム', its.length, its.length ? selectBtn() + viewToggle(mode) : '')}
+    ${secHead('アイテム', its.length, (its.length ? selectBtn() : '') + `<a class="link" href="#/loc/${id}/add">${ic('plus')}ここに入れる</a>` + (its.length ? viewToggle(mode) : ''))}
     ${its.length
       ? itemsBlock(its, mode)
-      : empty('image', 'まだアイテムがありません', '下の ＋ ボタンから、写真を撮って追加できます')}
-    <a class="add-tile" href="#/text?loc=${id}" style="margin-top:12px">${ic('note')}テキストでまとめて追加</a>
-    ${its.length ? '<p class="footnote">アイテムを長押しすると、複数選んでまとめて移動・タグ付け・削除ができます。</p>' : ''}`;
+      : empty('image', 'まだアイテムがありません', '登録済みのアイテムを写真から選んで入れるか、下の ＋ から新しく登録できます',
+        `<a class="btn primary" href="#/loc/${id}/add">${ic('image')}写真から選んで入れる</a>`)}
+    ${its.length ? '<p class="footnote">「選択」を押すか写真を長押しすると、写真をタップして選び、まとめて移動・タグ付け・削除ができます。</p>' : ''}`;
   bindViewToggle();
   $view.querySelector('[data-q="moveLoc"]').onclick = async () => {
     // 自分自身と、自分の中の場所には移せない
@@ -979,7 +978,7 @@ async function settingsView() {
     <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
 
     <div class="group-title">このアプリについて</div>
-    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.12</span></div></div>`;
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.13</span></div></div>`;
 
   const $export = $view.querySelector('#export');
   $export.onclick = async () => {
@@ -1547,7 +1546,7 @@ function bulkView(_, q) {
 
   const row = it => `<tr data-id="${it.id}" class="${selected.has(it.id) ? 'on' : ''}">
     <td class="c-sel"><input type="checkbox" class="sel" ${selected.has(it.id) ? 'checked' : ''} aria-label="選択"></td>
-    <td class="c-name"><input data-f="name" value="${esc(it.name)}" aria-label="名前"></td>
+    <td class="c-name"><div class="name-cell"><a class="mini" href="#/item/${it.id}" aria-label="開く">${media(it)}</a><input data-f="name" value="${esc(it.name)}" aria-label="名前"></div></td>
     <td class="c-qty"><input data-f="quantity" type="number" inputmode="numeric" min="0" value="${it.quantity ?? 1}" aria-label="数量"></td>
     <td class="c-loc"><button type="button" class="cell-btn" data-pick>${esc(pathText(it.locationId))}</button></td>
     <td class="c-tags"><input data-f="tags" value="${esc((it.tags ?? []).join(' '))}" placeholder="—" aria-label="タグ"></td>
@@ -1566,6 +1565,7 @@ function bulkView(_, q) {
     $rows.innerHTML = visible.length
       ? visible.map(row).join('')
       : `<tr><td colspan="6" class="grid-empty">該当するアイテムがありません</td></tr>`;
+    hydratePhotos($rows);
     drawSelection();
   }
   function drawSelection() {
@@ -1903,6 +1903,83 @@ function itemsView(_, q) {
 const inInstalledApp = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
 // fromQr：QR ラベルの行き先（場所・アイテム）の画面から来たとき
+// ---------- 場所に入れる：写真の一覧から、今あるアイテムを選んでこの場所に移す ----------
+// 「場所未設定」と「ほかの場所にあるもの」を分けて並べる。タップで選ぶ／外す
+const pickCard = it => `<button type="button" class="item-card" data-pid="${it.id}">
+    <span class="card-media">${media(it)}<span class="qty-badge">×${it.quantity ?? 1}</span></span>
+    <span class="card-body"><span class="card-name">${esc(it.name)}</span><span class="card-sub">${esc(it.locationId ? pathText(it.locationId) : tagText(it) || '場所未設定')}</span></span>
+  </button>`;
+
+function putView(id) {
+  const l = loc(id);
+  if (!l) return notFound();
+  setHeader(`「${l.name}」に入れる`, { back: `#/loc/${id}`, always: true });
+  const chosen = new Set();
+  let text = '';
+  $view.innerHTML = `
+    <div class="search-field" style="margin-top:4px"><label>${ic('search')}<input id="pq" type="search" placeholder="名前・タグ・場所で絞り込む" autocomplete="off"></label></div>
+    <div id="groups"></div>
+    <div class="savebar put-bar">
+      <span class="sel-count" id="pcount"></span>
+      <button class="btn primary block" id="put">${ic('check')}ここに入れる</button>
+    </div>`;
+  const $groups = $view.querySelector('#groups');
+  const $put = $view.querySelector('#put');
+
+  function draw() {
+    const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+    const match = it => {
+      const hay = [it.name, it.note, ...(it.tags ?? []), pathText(it.locationId)].join(' ').toLowerCase();
+      return words.every(w => hay.includes(w));
+    };
+    const unplaced = I.filter(it => !it.locationId && match(it)).sort(byName);
+    const elsewhere = I.filter(it => it.locationId && it.locationId !== id && match(it))
+      .sort((a, b) => pathText(a.locationId).localeCompare(pathText(b.locationId), 'ja') || byName(a, b));
+    const group = (title, list, hint) => list.length
+      ? secHead(title, list.length, `<button type="button" class="link" data-all="${title}">すべて選択</button>`)
+        + (hint ? `<p class="footnote" style="margin:-6px 4px 10px">${hint}</p>` : '')
+        + `<div class="item-grid pickable" data-group="${title}">${list.map(pickCard).join('')}</div>`
+      : '';
+    $groups.innerHTML = unplaced.length || elsewhere.length
+      ? group('場所未設定', unplaced) + group('ほかの場所にあるもの', elsewhere, '選ぶと、今の場所からここへ移ります')
+      : `<div style="margin-top:20px">${empty('box', words.length ? '見つかりませんでした' : 'ほかのアイテムはありません', words.length ? '別のことばで試してみてください' : '新しいアイテムは下の ＋ から登録できます')}</div>`;
+    hydratePhotos($groups);
+    drawChosen();
+  }
+  function drawChosen() {
+    $groups.querySelectorAll('[data-pid]').forEach(c => c.classList.toggle('picked', chosen.has(c.dataset.pid)));
+    $groups.querySelectorAll('[data-all]').forEach(b => {
+      const ids = [...$groups.querySelectorAll(`[data-group="${b.dataset.all}"] [data-pid]`)].map(c => c.dataset.pid);
+      b.textContent = ids.length && ids.every(x => chosen.has(x)) ? '選択を解除' : 'すべて選択';
+    });
+    $view.querySelector('#pcount').textContent = chosen.size ? `${chosen.size} 件を選択中` : '入れたいアイテムをタップして選んでください';
+    $put.disabled = !chosen.size;
+    $put.lastChild.textContent = chosen.size ? `${chosen.size} 件をここに入れる` : 'ここに入れる';
+  }
+  $groups.onclick = e => {
+    const all = e.target.closest('[data-all]');
+    if (all) {
+      const ids = [...$groups.querySelectorAll(`[data-group="${all.dataset.all}"] [data-pid]`)].map(c => c.dataset.pid);
+      const every = ids.every(x => chosen.has(x));
+      ids.forEach(x => (every ? chosen.delete(x) : chosen.add(x)));
+      return drawChosen();
+    }
+    const c = e.target.closest('[data-pid]');
+    if (!c) return;
+    chosen.has(c.dataset.pid) ? chosen.delete(c.dataset.pid) : chosen.add(c.dataset.pid);
+    drawChosen();
+  };
+  $view.querySelector('#pq').oninput = e => { text = e.target.value; draw(); };
+  $put.onclick = async () => {
+    if (!chosen.size) return;
+    $put.disabled = true;
+    await saveItems(pickItems([...chosen]).map(it => ({ ...it, locationId: id })));
+    toast(`${chosen.size} 件を「${l.name}」に入れました`);
+    location.replace(`#/loc/${id}`);
+  };
+  draw();
+}
+
 function notFound(fromQr = false) {
   setHeader('見つかりません', { back: '#/', always: true });
   if (fromQr && !inInstalledApp()) {
@@ -1937,6 +2014,7 @@ document.getElementById('tabAdd').onclick = () => {
 const routes = [
   [/^\/?$/, home, 'home'],
   [/^\/loc\/([\w-]+)\/edit$/, locEdit, 'home', true],
+  [/^\/loc\/([\w-]+)\/add$/, putView, 'home', true],
   [/^\/loc\/([\w-]+)$/, locView, 'home'],
   [/^\/item\/([\w-]+)\/edit$/, itemEdit, 'home', true],
   [/^\/item\/([\w-]+)$/, itemView, 'home'],

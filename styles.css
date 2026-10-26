@@ -599,11 +599,11 @@ body.editing .tabbar { display: none; }
 .grid .c-sel { left: 0; width: 44px; min-width: 44px; text-align: center; }
 .grid td.c-sel { padding-top: 12px; }
 /* 名前の列は左に固定。横にずらしたとき、ほかの列が固定列の右側に収まる幅にしておく */
-.grid .c-name { left: 44px; width: 132px; min-width: 132px; max-width: 132px; box-shadow: 1px 0 0 var(--line); }
+.grid .c-name { left: 44px; width: 164px; min-width: 164px; max-width: 164px; box-shadow: 1px 0 0 var(--line); }
 .grid .c-qty { min-width: 60px; width: 60px; }
 .grid .c-loc { min-width: 140px; }
 .grid .c-tags { min-width: 150px; }
-.grid .c-note { min-width: 180px; }
+.grid .c-note { min-width: 160px; }
 @media (min-width: 560px) { .grid .c-name { width: 220px; min-width: 220px; max-width: 220px; } .grid .c-note { min-width: 260px; } }
 .grid input:not(.sel), .grid textarea, .cell-btn {
   display: block; width: 100%; min-height: 44px; padding: 11px 10px;
@@ -725,6 +725,27 @@ body.selecting main { padding-bottom: calc(150px + env(safe-area-inset-bottom));
 .sel-top { display: flex; align-items: center; justify-content: space-between; max-width: 728px; margin: 0 auto 4px; }
 .sel-top .sel-count { font-size: 13px; font-weight: 700; color: var(--text); }
 .sel-top .link { font-size: 14px; }
+
+/* 場所に入れる（写真から選ぶ） */
+button.item-card { padding: 0; border: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.pickable .item-card::after {
+  content: ""; position: absolute; z-index: 2; top: 8px; left: 8px; width: 26px; height: 26px; border-radius: 50%;
+  border: 2px solid #fff; background: rgba(15, 23, 41, .28); box-shadow: 0 1px 4px rgba(0, 0, 0, .3);
+}
+.pickable .item-card.picked::after {
+  background: var(--accent) no-repeat center / 16px
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7.5'/%3E%3C/svg%3E");
+}
+.pickable .item-card.picked { box-shadow: 0 0 0 3px var(--accent); }
+.pickable .item-card.picked .card-media img, .pickable .item-card.picked .card-media .ph-tile { opacity: .82; }
+.put-bar .sel-count { margin-bottom: 8px; }
+body.editing main:has(.put-bar) { padding-bottom: calc(130px + env(safe-area-inset-bottom)); }
+
+/* 一覧で編集：名前の横の小さな写真 */
+.name-cell { display: flex; align-items: center; gap: 6px; padding-left: 8px; }
+.name-cell .mini { flex: none; width: 34px; height: 34px; border-radius: 8px; overflow: hidden; display: grid; }
+.name-cell .mini img, .name-cell .mini .ph-tile { width: 100%; height: 100%; object-fit: cover; font-size: 14px; }
+.name-cell input { padding-left: 2px !important; }
 
 /* 容量バー（設定） */
 .usage { padding: 14px 16px; }
