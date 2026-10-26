@@ -1,6 +1,6 @@
-import * as db from './db.js?v=14';
-import { readZip } from './zip.js?v=14';
-import { decodeCsv, parseCsv, toCsv } from './csv.js?v=14';
+import * as db from './db.js?v=15';
+import { readZip } from './zip.js?v=15';
+import { decodeCsv, parseCsv, toCsv } from './csv.js?v=15';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -301,7 +301,26 @@ const secHead = (title, count = '', extra = '') =>
   `<div class="sec-head"><h2>${title}</h2>${count !== '' ? `<span class="count">${count}</span>` : ''}<span class="spacer"></span>${extra}</div>`;
 const empty = (icon, title, text = '', action = '', cls = '') =>
   `<div class="empty ${cls}"><span class="bubble">${ic(icon)}</span><h3>${title}</h3>${text ? `<p>${text}</p>` : ''}${action}</div>`;
-const viewToggle = mode => `<div class="seg" id="mode">
+// 写真の一覧の列数。＋/− で変えられ、どの画面でも同じ列数で並ぶ
+const gridCols = () => Number(pref.get('gridCols', 0)) || (innerWidth >= 560 ? 3 : 2);
+function applyCols(n) {
+  const root = document.documentElement;
+  root.style.setProperty('--cols', n);
+  root.classList.toggle('cols-dense', n >= 4); // 列が多いときは文字を小さく
+  root.classList.toggle('cols-tiny', n >= 5);
+  document.querySelectorAll('.cols-n').forEach(e => { e.textContent = `${n}列`; });
+}
+const colsControl = () => `<div class="seg cols">
+  <button type="button" data-cols="-1" aria-label="列を減らす">${ic('minus')}</button><span class="cols-n">${gridCols()}列</span><button type="button" data-cols="1" aria-label="列を増やす">${ic('plus')}</button>
+</div>`;
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-cols]');
+  if (!b) return;
+  const n = Math.min(6, Math.max(1, gridCols() + Number(b.dataset.cols)));
+  pref.set('gridCols', n);
+  applyCols(n);
+});
+const viewToggle = mode => `${mode === 'grid' ? colsControl() : ''}<div class="seg" id="mode">
   <button type="button" data-mode="grid" class="${mode === 'grid' ? 'on' : ''}" aria-label="写真で表示">${ic('grid')}</button>
   <button type="button" data-mode="list" class="${mode === 'list' ? 'on' : ''}" aria-label="リストで表示">${ic('list')}</button>
 </div>`;
@@ -401,11 +420,11 @@ function locView(id) {
     ${kids.length
       ? `<div class="place-grid">${kids.map(placeCard).join('')}</div>`
       : `<a class="add-tile" href="#/loc/new/edit?parent=${id}">${ic('plus')}この中に場所を追加（棚・引き出し・箱など）</a>`}
-    ${secHead('アイテム', its.length, (its.length ? selectBtn() : '') + `<a class="link" href="#/loc/${id}/add">${ic('plus')}ここに入れる</a>` + (its.length ? viewToggle(mode) : ''))}
+    ${secHead('アイテム', its.length, (its.length ? selectBtn() : '') + `<a class="link" href="#/loc/${id}/add">${ic('plus')}アイテムを追加</a>` + (its.length ? viewToggle(mode) : ''))}
     ${its.length
       ? itemsBlock(its, mode)
-      : empty('image', 'まだアイテムがありません', '登録済みのアイテムを写真から選んで入れるか、下の ＋ から新しく登録できます',
-        `<a class="btn primary" href="#/loc/${id}/add">${ic('image')}写真から選んで入れる</a>`)}
+      : empty('image', 'まだアイテムがありません', '登録済みのアイテムから選んで入れたり、新しく登録したりできます',
+        `<a class="btn primary" href="#/loc/${id}/add">${ic('plus')}アイテムを追加</a>`)}
     ${its.length ? '<p class="footnote">「選択」を押すか写真を長押しすると、写真をタップして選び、まとめて移動・タグ付け・削除ができます。</p>' : ''}`;
   bindViewToggle();
   $view.querySelector('[data-q="moveLoc"]').onclick = async () => {
@@ -978,7 +997,7 @@ async function settingsView() {
     <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
 
     <div class="group-title">このアプリについて</div>
-    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.13</span></div></div>`;
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.14</span></div></div>`;
 
   const $export = $view.querySelector('#export');
   $export.onclick = async () => {
@@ -1466,6 +1485,7 @@ function exitSelect() {
   sel.bar = null;
   document.body.classList.remove('selecting');
   $view.querySelectorAll('.picked').forEach(e => e.classList.remove('picked'));
+  $view.querySelectorAll('[data-select-start]').forEach(b => b.classList.remove('active'));
 }
 function drawSel() {
   if (!sel.on) return;
@@ -1474,6 +1494,10 @@ function drawSel() {
   sel.bar.querySelectorAll('[data-act]').forEach(b => { b.disabled = !sel.ids.size; });
   const all = visibleIds();
   sel.bar.querySelector('[data-sel-all]').textContent = all.length && all.every(id => sel.ids.has(id)) ? '選択を解除' : 'すべて選択';
+  // 「選択」ボタンがある画面は、それをもう一度押して終える。ない画面（ホームの長押しなど）だけ「完了」を出す
+  const btns = $view.querySelectorAll('[data-select-start]');
+  btns.forEach(b => b.classList.add('active'));
+  sel.bar.querySelector('[data-sel-done]').hidden = btns.length > 0;
 }
 (function bindSelect() {
   let timer = null, start = null, longPressed = false;
@@ -1497,7 +1521,7 @@ function drawSel() {
   // 長押しで出るブラウザのメニュー（リンクのプレビューなど）を出さない
   $view.addEventListener('contextmenu', e => { if (cardOf(e.target)) e.preventDefault(); });
   $view.addEventListener('click', e => {
-    if (e.target.closest('[data-select-start]')) return startSelect();
+    if (e.target.closest('[data-select-start]')) return sel.on ? exitSelect() : startSelect();
     const c = cardOf(e.target);
     if (!c) return;
     if (longPressed) { e.preventDefault(); longPressed = false; return; }
@@ -1913,15 +1937,17 @@ const pickCard = it => `<button type="button" class="item-card" data-pid="${it.i
 function putView(id) {
   const l = loc(id);
   if (!l) return notFound();
-  setHeader(`「${l.name}」に入れる`, { back: `#/loc/${id}`, always: true });
+  setHeader(`「${l.name}」にアイテムを追加`, { back: `#/loc/${id}`, always: true });
   const chosen = new Set();
   let text = '';
   $view.innerHTML = `
-    <div class="search-field" style="margin-top:4px"><label>${ic('search')}<input id="pq" type="search" placeholder="名前・タグ・場所で絞り込む" autocomplete="off"></label></div>
+    <a class="add-tile" href="#/item/new/edit?loc=${id}" style="margin-top:8px">${ic('camera')}新しいアイテムを登録する</a>
+    <div class="search-field" style="margin-top:8px"><label>${ic('search')}<input id="pq" type="search" placeholder="登録済みのアイテムを名前・タグ・場所で絞り込む" autocomplete="off"></label></div>
+    <div class="sec-head" style="margin:4px 2px 0"><span class="meta" style="margin:0">登録済みのアイテムから選ぶ</span><span class="spacer"></span>${colsControl()}</div>
     <div id="groups"></div>
     <div class="savebar put-bar">
       <span class="sel-count" id="pcount"></span>
-      <button class="btn primary block" id="put">${ic('check')}ここに入れる</button>
+      <button class="btn primary block" id="put">${ic('check')}追加する</button>
     </div>`;
   const $groups = $view.querySelector('#groups');
   const $put = $view.querySelector('#put');
@@ -1952,9 +1978,9 @@ function putView(id) {
       const ids = [...$groups.querySelectorAll(`[data-group="${b.dataset.all}"] [data-pid]`)].map(c => c.dataset.pid);
       b.textContent = ids.length && ids.every(x => chosen.has(x)) ? '選択を解除' : 'すべて選択';
     });
-    $view.querySelector('#pcount').textContent = chosen.size ? `${chosen.size} 件を選択中` : '入れたいアイテムをタップして選んでください';
+    $view.querySelector('#pcount').textContent = chosen.size ? `${chosen.size} 件を選択中` : '追加したいアイテムをタップして選んでください';
     $put.disabled = !chosen.size;
-    $put.lastChild.textContent = chosen.size ? `${chosen.size} 件をここに入れる` : 'ここに入れる';
+    $put.lastChild.textContent = chosen.size ? `${chosen.size} 件を追加する` : '追加する';
   }
   $groups.onclick = e => {
     const all = e.target.closest('[data-all]');
@@ -1974,7 +2000,7 @@ function putView(id) {
     if (!chosen.size) return;
     $put.disabled = true;
     await saveItems(pickItems([...chosen]).map(it => ({ ...it, locationId: id })));
-    toast(`${chosen.size} 件を「${l.name}」に入れました`);
+    toast(`${chosen.size} 件を「${l.name}」に追加しました`);
     location.replace(`#/loc/${id}`);
   };
   draw();
@@ -2061,6 +2087,7 @@ window.addEventListener('scroll', onScroll, { passive: true });
 window.addEventListener('hashchange', render);
 // PC サーバー（server.py）から開いているかを確かめる。GitHub Pages では見つからないので null のまま
 pcServer = await fetch('api/ping', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null);
+applyCols(gridCols());
 await load();
 await render();
 ensureThumbs();

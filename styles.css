@@ -131,7 +131,7 @@ body.editing main { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
 .crumbs .ic { width: 14px; height: 14px; }
 
 .sec-head {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 8px;
   margin: 28px 2px 12px;
 }
 .sec-head h2 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: -.005em; }
@@ -206,8 +206,19 @@ body.editing main { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
 }
 
 /* アイテムカード（グリッド） */
-.item-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-@media (min-width: 560px) { .item-grid { grid-template-columns: repeat(3, 1fr); } }
+.item-grid { display: grid; grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr)); gap: 12px; }
+/* 列を増やしたとき：すき間と文字を小さくして、写真が見えるようにする */
+.cols-dense .item-grid { gap: 8px; }
+.cols-dense .card-body { padding: 6px 8px 8px; }
+.cols-dense .card-name { font-size: 12px; }
+.cols-dense .card-sub { display: none; }
+.cols-dense .qty-badge { right: 4px; bottom: 4px; padding: 0 6px; font-size: 10px; }
+.cols-dense .card-media .ph-tile { font-size: 24px; }
+.cols-dense .item-card { border-radius: 12px; }
+.cols-tiny .item-grid { gap: 6px; }
+.cols-tiny .card-body { padding: 4px 6px 6px; }
+.cols-tiny .card-name { font-size: 11px; }
+.cols-dense .pickable .item-card::after, .cols-dense body.selecting .item-card[data-id]::after { width: 20px; height: 20px; top: 5px; left: 5px; }
 .item-card {
   display: flex; flex-direction: column; min-width: 0;
   border-radius: var(--r); overflow: hidden;
@@ -277,6 +288,10 @@ body.editing main { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
 .seg button.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
 .seg .ic { width: 17px; height: 17px; }
 .seg.text button { width: auto; padding: 0 12px; font-size: 13px; font-weight: 600; }
+.seg.cols { align-items: center; margin-right: 6px; }
+.seg.cols button { width: 30px; color: var(--accent); }
+.seg.cols .cols-n { min-width: 2.6em; text-align: center; font-size: 12px; font-weight: 700; color: var(--text-2); font-variant-numeric: tabular-nums; }
+[data-select-start].active { padding: 4px 10px; border-radius: 999px; background: var(--accent); color: var(--on-accent); }
 
 /* 空のとき */
 .empty {
