@@ -1,6 +1,6 @@
-import * as db from './db.js?v=9';
-import { readZip } from './zip.js?v=9';
-import { decodeCsv, parseCsv, toCsv } from './csv.js?v=9';
+import * as db from './db.js?v=10';
+import { readZip } from './zip.js?v=10';
+import { decodeCsv, parseCsv, toCsv } from './csv.js?v=10';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -292,7 +292,7 @@ async function home() {
     </div>
     ${secHead('場所', roots.length, `<a class="link" href="#/loc/new/edit">${ic('plus')}追加</a>`)}
     <div class="place-grid">${roots.map(placeCard).join('') || `<a class="add-tile" href="#/loc/new/edit">${ic('plus')}場所を追加</a>`}</div>
-    ${recent.length ? secHead('最近追加したもの') + `<div class="hscroll">${recent.map(i => itemCard(i, true)).join('')}</div>` : ''}
+    ${recent.length ? secHead('アイテム', I.length, `<a class="link" href="#/items">一覧を見る${ic('chevR')}</a>`) + `<div class="hscroll">${recent.map(i => itemCard(i, true)).join('')}</div>` : ''}
     ${unplaced.length ? secHead('場所未設定', unplaced.length, `<button type="button" class="link" id="placeAll">${ic('pin')}まとめて場所へ</button>`)
       + `<a class="add-tile" href="#/bulk?unplaced=1" style="margin-bottom:12px">${ic('table')}選んで場所へ移動する</a>`
       + itemsBlock(unplaced, 'list') : ''}`;
@@ -891,7 +891,7 @@ async function settingsView() {
     <p class="footnote">「消えにくい保存」が有効だと、端末の空きが少なくなってもブラウザがデータを消しにくくなります。ホーム画面に追加して使うと有効になりやすくなります。</p>
 
     <div class="group-title">このアプリについて</div>
-    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.8</span></div></div>`;
+    <div class="group"><div class="kv-row"><span>モノ管理</span><span>バージョン 1.9</span></div></div>`;
 
   const $export = $view.querySelector('#export');
   $export.onclick = async () => {
@@ -1639,6 +1639,64 @@ function transferView() {
   return () => clearInterval(timer);
 }
 
+// ---------- すべてのアイテム（ホームの「一覧を見る →」から。検索結果と同じ見せ方） ----------
+const SORTS = {
+  new: ['新しい順', (a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)],
+  name: ['名前順', byName],
+  place: ['場所順', (a, b) => pathText(a.locationId).localeCompare(pathText(b.locationId), 'ja') || byName(a, b)],
+};
+
+function itemsView(_, q) {
+  setHeader('すべてのアイテム', { back: '#/' });
+  let text = q.get('q') ?? '';
+  let sort = SORTS[q.get('sort')] ? q.get('sort') : pref.get('itemSort', 'new');
+  const mode = pref.get('itemView', 'grid');
+  if (!I.length) {
+    $view.innerHTML = `<header class="page-head"><h1 class="large">すべてのアイテム</h1></header>
+      ${empty('box', 'まだアイテムがありません', '下の ＋ ボタンから追加できます')}`;
+    return;
+  }
+  $view.innerHTML = `
+    <header class="page-head"><h1 class="large">すべてのアイテム</h1><p class="meta">${I.length} 件</p></header>
+    <div class="search-field"><label>${ic('search')}<input id="fq" type="search" enterkeyhint="search" placeholder="この中で絞り込む" value="${esc(text)}" autocomplete="off"></label></div>
+    <div class="sec-head" style="margin-top:4px">
+      <div class="seg text" id="sort">${Object.entries(SORTS).map(([k, [label]]) =>
+        `<button type="button" data-sort="${k}" class="${k === sort ? 'on' : ''}">${label}</button>`).join('')}</div>
+      <span class="spacer"></span>${viewToggle(mode)}
+    </div>
+    <div id="list"></div>
+    <a class="add-tile" href="#/bulk" style="margin-top:16px">${ic('table')}一覧で編集する</a>`;
+
+  function draw() {
+    const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+    const list = I.filter(it => {
+      const hay = [it.name, it.note, ...(it.tags ?? []), pathText(it.locationId)].join(' ').toLowerCase();
+      return words.every(w => hay.includes(w));
+    }).sort(SORTS[sort][1]);
+    $view.querySelector('#list').innerHTML = list.length
+      ? (words.length ? `<p class="result-count" style="margin-top:4px">${list.length} 件</p>` : '') + itemsBlock(list, mode, true)
+      : empty('search', '見つかりませんでした', '別のことばで試してみてください');
+    hydratePhotos();
+    // 戻ってきたとき・表示を切り替えたときに条件が残るよう URL に反映
+    const p = new URLSearchParams();
+    if (text) p.set('q', text);
+    if (sort !== 'new') p.set('sort', sort);
+    const qs = p.toString();
+    history.replaceState(null, '', `#/items${qs ? '?' + qs : ''}`);
+  }
+  $view.querySelector('#fq').oninput = e => { text = e.target.value; draw(); };
+  $view.querySelector('#sort').onclick = e => {
+    const k = e.target.closest('[data-sort]')?.dataset.sort;
+    if (!k) return;
+    sort = k;
+    pref.set('itemSort', k);
+    $view.querySelectorAll('#sort button').forEach(b => b.classList.toggle('on', b.dataset.sort === k));
+    draw();
+  };
+  bindViewToggle();
+  draw();
+}
+
 function notFound() {
   setHeader('見つかりません', { back: '#/', always: true });
   $view.innerHTML = `<div style="margin-top:12px">${empty('info', '見つかりませんでした', '削除されたか、別の端末のデータです')}</div>`;
@@ -1667,6 +1725,7 @@ const routes = [
   [/^\/item\/([\w-]+)$/, itemView, 'home'],
   [/^\/label\/([\w-]+)$/, labelView, 'home'],
   [/^\/search$/, searchView, 'search'],
+  [/^\/items$/, itemsView, 'home'],
   [/^\/scan$/, scanView, 'scan'],
   [/^\/settings$/, settingsView, 'settings'],
   [/^\/import$/, importView, 'settings', true],
